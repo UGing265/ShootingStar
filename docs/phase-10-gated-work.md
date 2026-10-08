@@ -17,8 +17,8 @@ In alignment with our core engineering principles (*evidence-first, no invented 
 | Property | Details |
 | :--- | :--- |
 | **Status** | **GATED** |
-| **Current Blocker** | Cost-adjusted 3-class performance remains unproven. Directional accuracy on held-out test data is **51.05%** vs Majority Class **51.46%**. Binance Spot fees (0.1000% maker / 0.1000% taker = 0.2000% roundtrip) exceed gross margin under simple directional strategies. Zero-slippage assumption is prohibited. |
-| **Unblocking Criteria** | 1. Completion of an empirical orderbook depth & L2 slippage study on BTCUSDT.<br>2. Development and validation of an edge-generating feature set achieving out-of-sample directional accuracy $> 52.5\%$ or cost-adjusted Sharpe ratio $> 1.0$ under realistic execution drag. |
+| **Current Blocker** | Cost-adjusted 3-class labeling and action policies remain unproven and blocked under plan §4. Binance Spot fee schedule (0.1000% maker / 0.1000% taker) requires defensible execution assumptions; assuming zero slippage is strictly prohibited. |
+| **Unblocking Criteria** | 1. Formal stakeholder review and approval of an empirical orderbook depth & slippage model (zero slippage prohibited).<br>2. Formally documented and tested action decision policy accounting for positive execution latency.<br>3. Verified out-of-sample positive net expectancy after transaction costs and execution drag on immutable snapshots. |
 | **Associated Artifacts** | `docs/binance-spot-fees.md`, `src/shootingstar/application/evaluation.py` |
 
 ---

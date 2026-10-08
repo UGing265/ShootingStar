@@ -8,10 +8,11 @@ No fabricated profits, slippages, or fake claims.
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import select, text
+from shootingstar.adapters.db.models import SnapshotModel
 
 from shootingstar.adapters.db.repository import (
     ExperimentRepository,
@@ -107,7 +108,7 @@ def get_health():
 
 
 @app.get("/snapshots", response_model=List[SnapshotSummary])
-def list_snapshots(limit: int = 50):
+def list_snapshots(limit: int = Query(default=50, ge=1, le=500)):
     """Lists immutable historical candle snapshots with SHA-256 checksums."""
     with get_db_session() as session:
         repo = SnapshotRepository(session)
@@ -209,11 +210,14 @@ def get_patterns(snapshot_id: Optional[str] = None):
                 else:
                     raise HTTPException(status_code=404, detail=f"Snapshot '{snapshot_id}' not found")
         else:
-            all_snaps = snap_repo.list_all(limit=1)
-            if not all_snaps:
+            stmt = (
+                select(SnapshotModel)
+                .order_by(SnapshotModel.end_time_ms.desc(), SnapshotModel.id.asc())
+                .limit(1)
+            )
+            snap = session.scalars(stmt).first()
+            if not snap:
                 raise HTTPException(status_code=404, detail="No snapshots available for pattern analysis")
-            snap = all_snaps[0]
-
         target_file_path = snap.file_path
         snap_id = snap.id
         snap_sha256 = snap.sha256
@@ -246,7 +250,7 @@ def get_narrative():
     return {"markdown": narrative_path.read_text(encoding="utf-8")}
 
 @app.get("/signals", response_model=List[SignalSummary])
-def list_signals(limit: int = 50):
+def list_signals(limit: int = Query(default=50, ge=1, le=500)):
     """Lists append-only predictions and their maturation outcomes."""
     with get_db_session() as session:
         repo = SignalRepository(session)

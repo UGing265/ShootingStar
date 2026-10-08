@@ -89,33 +89,41 @@ class SignalLifecycleService:
         horizon_ms = signal.horizon_minutes * 60 * 1000
         target_time_ms = signal.prediction_time_ms + horizon_ms
 
+        if not candles_by_open_time:
+            return None
+
+        max_available_time = max(candles_by_open_time.keys())
+        min_available_time = min(candles_by_open_time.keys())
+
         c_t = candles_by_open_time.get(signal.prediction_time_ms)
         if not c_t:
-            # Cannot find entry candle
-            outcome = SignalOutcomeModel(
-                signal_id=signal.id,
-                status="UNSCORABLE",
-                evaluated_at_ms=now_ms,
-                unscorable_reason="Entry candle at prediction time is missing",
-            )
-            return self.signal_repo.save_outcome(outcome)
-
-        c_target = candles_by_open_time.get(target_time_ms)
-        if not c_target:
-            # Target time has not yet arrived or candle not yet closed
-            if target_time_ms > now_ms:
-                # Still legitimately PENDING: target interval is in the future
-                return None
-            else:
-                # Target time is in the past but candle is missing: UNSCORABLE
+            if min_available_time <= signal.prediction_time_ms <= max_available_time:
+                # Entry candle is missing inside the covered window: confirmed gap
                 outcome = SignalOutcomeModel(
                     signal_id=signal.id,
                     status="UNSCORABLE",
                     evaluated_at_ms=now_ms,
-                    unscorable_reason="Target candle is missing or incomplete in history",
+                    unscorable_reason="Entry candle at prediction time is missing (gap detected in covered history)",
                 )
                 return self.signal_repo.save_outcome(outcome)
+            else:
+                # Window does not cover prediction time yet/anymore
+                return None
 
+        c_target = candles_by_open_time.get(target_time_ms)
+        if not c_target:
+            if max_available_time < target_time_ms:
+                # Stream has not ingested up to target_time_ms yet: still legitimately PENDING
+                return None
+            else:
+                # Covered stream extends beyond target_time_ms but target candle is absent: permanent gap
+                outcome = SignalOutcomeModel(
+                    signal_id=signal.id,
+                    status="UNSCORABLE",
+                    evaluated_at_ms=now_ms,
+                    unscorable_reason="Target candle is missing (gap detected in history beyond target time)",
+                )
+                return self.signal_repo.save_outcome(outcome)
         # Target candle is available and closed!
         entry_price = c_t.close
         target_price = c_target.close

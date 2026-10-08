@@ -111,9 +111,17 @@ def test_signal_maturation_lifecycle_and_immutability(db_session):
     outcome_pending = service.mature_signal(pred, candles, now_ms=t0 + 600000)
     assert outcome_pending is None
     assert sig_repo.get_outcome_by_signal_id(pred.id) is None
+    # 3. Target time arrived in real-time, but stream hasn't ingested up to target time yet:
+    # Still legitimately PENDING (does NOT ruin signal if batch is delayed)
+    outcome_delayed = service.mature_signal(pred, candles, now_ms=t0 + horizon_ms + 1000)
+    assert outcome_delayed is None
 
-    # 3. Target time arrived but candle missing: matures to UNSCORABLE
-    outcome_unscorable = service.mature_signal(pred, candles, now_ms=t0 + horizon_ms + 1000)
+    # 4. Stream progressed past target time but target candle is absent: true gap -> UNSCORABLE
+    t_beyond = t0 + horizon_ms + 300000
+    c_beyond = Candle("BINANCE", "BTCUSDT", "5m", t_beyond, t_beyond + 299999, 50200.0, 50300.0, 50100.0, 50200.0, 1.0, 50000.0, 1, 0.5, 25000.0)
+    candles_with_gap = {t0: c0, t_beyond: c_beyond}
+
+    outcome_unscorable = service.mature_signal(pred, candles_with_gap, now_ms=t_beyond + 1000)
     assert outcome_unscorable is not None
     assert outcome_unscorable.status == "UNSCORABLE"
     # Invariant: original prediction row is strictly unchanged
