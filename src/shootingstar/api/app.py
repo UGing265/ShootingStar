@@ -159,8 +159,7 @@ def get_experiment_detail(experiment_id: str):
 
         exp = exp_repo.get_by_id(experiment_id)
         if not exp:
-            raise HTTPException(status_code=44, detail=f"Experiment '{experiment_id}' not found")
-
+            raise HTTPException(status_code=404, detail=f"Experiment '{experiment_id}' not found")
         splits = [
             {
                 "split_type": s.split_type,
@@ -192,31 +191,59 @@ def get_experiment_detail(experiment_id: str):
 
 @app.get("/patterns")
 def get_patterns(snapshot_id: Optional[str] = None):
-    """Evaluates Pattern Lab rules on a snapshot and returns statistical distributions."""
+    """Evaluates Pattern Lab rules on a snapshot and returns statistical distributions.
+    
+    Snapshot selection is strictly deterministic: resolves from PostgreSQL catalog
+    by sha256/id or selects the latest registered snapshot (ordered by end_time_ms desc, id asc).
+    Raises 404 if snapshot does not exist.
+    """
+    with get_db_session() as session:
+        snap_repo = SnapshotRepository(session)
+        if snapshot_id:
+            snap = snap_repo.get_by_sha256(snapshot_id)
+            if not snap:
+                all_snaps = snap_repo.list_all(limit=100)
+                matches = [s for s in all_snaps if snapshot_id in s.id or snapshot_id in s.sha256]
+                if matches:
+                    snap = matches[0]
+                else:
+                    raise HTTPException(status_code=404, detail=f"Snapshot '{snapshot_id}' not found")
+        else:
+            all_snaps = snap_repo.list_all(limit=1)
+            if not all_snaps:
+                raise HTTPException(status_code=404, detail="No snapshots available for pattern analysis")
+            snap = all_snaps[0]
+
+        target_file_path = snap.file_path
+        snap_id = snap.id
+        snap_sha256 = snap.sha256
+
     storage = SnapshotStorage()
-    snapshots_dir = Path("data/snapshots")
-    parquet_files = list(snapshots_dir.glob("*.parquet"))
+    target_path = Path(target_file_path)
+    if not target_path.exists():
+        raise HTTPException(status_code=404, detail=f"Snapshot file '{target_path}' not found on disk")
 
-    if not parquet_files:
-        return {"message": "No snapshots available for pattern analysis", "reports": []}
-
-    target_file = parquet_files[0]
-    if snapshot_id:
-        matches = [f for f in parquet_files if snapshot_id in f.name]
-        if matches:
-            target_file = matches[0]
-
-    candles = storage.load_snapshot(target_file)
+    candles = storage.load_snapshot(target_path)
     lab = PatternLabService()
     reports = lab.analyze_all(candles, horizon_minutes=30)
 
     return {
-        "snapshot": target_file.name,
+        "snapshot_id": snap_id,
+        "snapshot_sha256": snap_sha256,
+        "snapshot_file": target_path.name,
         "candle_count": len(candles),
         "reports": [r.to_dict() for r in reports],
         "hypothesis_track": "SEPARATE_HYPOTHESIS_TRACK_NOT_IN_MODEL_FEATURES",
     }
 
+
+@app.get("/narrative")
+def get_narrative():
+    """Returns the evidence-first landing narrative document."""
+    narrative_path = Path("docs/landing-page-narrative.md")
+    if not narrative_path.exists():
+        raise HTTPException(status_code=404, detail="Narrative document not found")
+    return {"markdown": narrative_path.read_text(encoding="utf-8")}
 
 @app.get("/signals", response_model=List[SignalSummary])
 def list_signals(limit: int = 50):

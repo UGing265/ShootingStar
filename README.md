@@ -35,12 +35,38 @@ pip install -e ".[dev]"
 
 ### Running the CLI
 ```bash
-# Check version and help
+# Check CLI help and available subcommands
 shootingstar --help
-shootingstar --version
+
+# 1. Pilot Ingestion (Binance Spot REST API)
+shootingstar fetch-pilot --symbol BTCUSDT --timeframe 5m --days 30
+
+# 2. Snapshot Catalog
+shootingstar list-snapshots
+shootingstar show-snapshot --id <SHA256_OR_PATH>
+
+# 3. Run Walk-Forward Research Experiment
+shootingstar run-experiment --snapshot <SHA256_OR_PATH> --id exp_pilot_5m_lr
+
+# 4. Rule-Based Pattern Lab (Separate Hypothesis Track)
+shootingstar scan-patterns --snapshot <SHA256_OR_PATH>
+
+# 5. Append-Only Signals & Maturation
+shootingstar list-signals --limit 20
+shootingstar mature-signals --snapshot <SHA256_OR_PATH>
+
+# 6. Launch Research Web UI & REST API
+shootingstar serve --host 127.0.0.1 --port 8000
 ```
 
-### Running Tests
+### Web Platform & API Endpoints
+When `shootingstar serve` is running:
+- **Research Dashboard:** `http://127.0.0.1:8000/`
+- **Interactive Swagger API Docs:** `http://127.0.0.1:8000/docs`
+- **Landing Page Narrative:** `http://127.0.0.1:8000/narrative` (or see [`docs/landing-page-narrative.md`](docs/landing-page-narrative.md))
+- **Binance Spot Fee & Slippage Gating:** [`docs/binance-spot-fees.md`](docs/binance-spot-fees.md)
+
+### Running Full Test Suite
 ```bash
-pytest
+pytest -v
 ```
