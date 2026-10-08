@@ -43,6 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     # Command: show-snapshot
     show_parser = subparsers.add_parser("show-snapshot", help="Show snapshot metadata from PostgreSQL database")
     show_parser.add_argument("--id", required=True, help="Snapshot SHA-256 hash or ID")
+    # Command: run-experiment
+    exp_parser = subparsers.add_parser("run-experiment", help="Run 30-minute research experiment on a candle snapshot")
+    exp_parser.add_argument("--snapshot", required=True, help="Snapshot file path or SHA-256 hash")
+    exp_parser.add_argument("--id", default="exp_lr_30m_pilot", help="Experiment ID")
 
     return parser
 
@@ -171,6 +175,34 @@ def main(argv=None) -> int:
                 return 0
         except Exception as e:
             logger.error("Failed to show snapshot: %s", e)
+            return 1
+    if args.command == "run-experiment":
+        from pathlib import Path
+        from shootingstar.application.experiment import ExperimentRunner
+
+        snap_arg = Path(args.snapshot)
+        if not snap_arg.exists():
+            matches = list(Path("data/snapshots").glob(f"*{args.snapshot}*.parquet"))
+            if matches:
+                snap_arg = matches[0]
+            else:
+                print(f"Snapshot file not found: {args.snapshot}")
+                return 1
+
+        print(f"=== Running Experiment: {args.id} on {snap_arg.name} ===")
+        runner = ExperimentRunner()
+        try:
+            report, artifact_path, artifact_hash = runner.run_experiment(
+                snapshot_path=snap_arg,
+                experiment_id=args.id,
+            )
+            print("\n" + report.to_markdown())
+            print(f"\nModel Artifact:  {artifact_path} (SHA-256: {artifact_hash})")
+            print(f"Markdown Report: data/reports/{args.id}_report.md")
+            print(f"JSON Report:     data/reports/{args.id}_report.json")
+            return 0
+        except Exception as e:
+            logger.error("Experiment failed: %s", e)
             return 1
 
     return 0
