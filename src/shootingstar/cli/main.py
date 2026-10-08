@@ -47,6 +47,10 @@ def build_parser() -> argparse.ArgumentParser:
     exp_parser = subparsers.add_parser("run-experiment", help="Run 30-minute research experiment on a candle snapshot")
     exp_parser.add_argument("--snapshot", required=True, help="Snapshot file path or SHA-256 hash")
     exp_parser.add_argument("--id", default="exp_lr_30m_pilot", help="Experiment ID")
+    # Command: scan-patterns
+    pattern_parser = subparsers.add_parser("scan-patterns", help="Scan declarative candle patterns and measure forward 30m returns")
+    pattern_parser.add_argument("--snapshot", required=True, help="Snapshot file path or SHA-256 hash")
+    pattern_parser.add_argument("--horizon", type=int, default=30, help="Forward return horizon in minutes (default: 30)")
 
     return parser
 
@@ -205,6 +209,36 @@ def main(argv=None) -> int:
             logger.error("Experiment failed: %s", e)
             return 1
 
+
+    if args.command == "scan-patterns":
+        from pathlib import Path
+        from shootingstar.adapters.storage import SnapshotStorage
+        from shootingstar.application.patterns import PatternLabService
+
+        snap_arg = Path(args.snapshot)
+        if not snap_arg.exists():
+            matches = list(Path("data/snapshots").glob(f"*{args.snapshot}*.parquet"))
+            if matches:
+                snap_arg = matches[0]
+            else:
+                print(f"Snapshot file not found: {args.snapshot}")
+                return 1
+
+        snap_storage = SnapshotStorage()
+        candles = snap_storage.load_snapshot(snap_arg)
+        print(f"=== Scanning Patterns on {snap_arg.name} ({len(candles)} candles) ===\n")
+
+        lab = PatternLabService()
+        reports = lab.analyze_all(candles, horizon_minutes=args.horizon)
+
+        print(f"{'Pattern Name':<20} {'Target':<7} {'Hits':<6} {'Win Rate':<10} {'Mean 30m Ret':<14} {'Statistical Power'}")
+        print("-" * 80)
+        for r in reports:
+            power_str = "WARNING (N<30)" if r.statistical_power_warning else "OK (N>=30)"
+            print(f"{r.rule_name:<20} {r.expected_direction:<7} {r.sample_count:<6} {r.win_rate*100:<9.1f}% {r.mean_return_30m*100:<13.3f}% {power_str}")
+
+        print("\n[NOTE] Pattern Lab is a separate hypothesis track and is NOT mixed into classifier features.")
+        return 0
     return 0
 
 
