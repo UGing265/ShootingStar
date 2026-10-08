@@ -51,6 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
     pattern_parser = subparsers.add_parser("scan-patterns", help="Scan declarative candle patterns and measure forward 30m returns")
     pattern_parser.add_argument("--snapshot", required=True, help="Snapshot file path or SHA-256 hash")
     pattern_parser.add_argument("--horizon", type=int, default=30, help="Forward return horizon in minutes (default: 30)")
+    # Command: list-signals
+    sig_parser = subparsers.add_parser("list-signals", help="List recent signal predictions and their maturation outcomes")
+    sig_parser.add_argument("--limit", type=int, default=20, help="Maximum number of signals to list (default: 20)")
+    # Command: mature-signals
+    mature_parser = subparsers.add_parser("mature-signals", help="Evaluate pending signals against closed snapshot candles")
+    mature_parser.add_argument("--snapshot", required=True, help="Snapshot file path or SHA-256 hash containing recent candles")
 
     return parser
 
@@ -238,6 +244,63 @@ def main(argv=None) -> int:
             print(f"{r.rule_name:<20} {r.expected_direction:<7} {r.sample_count:<6} {r.win_rate*100:<9.1f}% {r.mean_return_30m*100:<13.3f}% {power_str}")
 
         print("\n[NOTE] Pattern Lab is a separate hypothesis track and is NOT mixed into classifier features.")
+        return 0
+
+    if args.command == "list-signals":
+        from shootingstar.adapters.db.repository import SignalRepository
+        from shootingstar.adapters.db.session import get_db_session
+
+        with get_db_session() as session:
+            repo = SignalRepository(session)
+            predictions = repo.list_predictions(limit=args.limit)
+            if not predictions:
+                print("No signals recorded in database.")
+                return 0
+
+            print(f"{'Signal ID':<22} {'Pred Time (UTC)':<20} {'Symbol':<8} {'Pred':<5} {'Dec':<9} {'P(UP)':<7} {'Status':<11} {'Outcome'}")
+            print("-" * 95)
+            for p in predictions:
+                outcome = repo.get_outcome_by_signal_id(p.id)
+                dt_str = datetime.fromtimestamp(p.prediction_time_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+                status = outcome.status if outcome else "PENDING"
+                outcome_detail = f"{outcome.realized_label} ({outcome.realized_return*100:+.2f}%)" if (outcome and outcome.realized_return is not None) else "-"
+                print(f"{p.id:<22} {dt_str:<20} {p.symbol:<8} {p.predicted_class:<5} {p.decision:<9} {p.probability_up:<7.3f} {status:<11} {outcome_detail}")
+        return 0
+
+    if args.command == "mature-signals":
+        import time
+        from pathlib import Path
+        from shootingstar.adapters.storage import SnapshotStorage
+        from shootingstar.adapters.db.repository import SignalRepository
+        from shootingstar.adapters.db.session import get_db_session
+        from shootingstar.application.signals import SignalLifecycleService
+
+        snap_arg = Path(args.snapshot)
+        if not snap_arg.exists():
+            matches = list(Path("data/snapshots").glob(f"*{args.snapshot}*.parquet"))
+            if matches:
+                snap_arg = matches[0]
+            else:
+                print(f"Snapshot file not found: {args.snapshot}")
+                return 1
+
+        storage = SnapshotStorage()
+        candles = storage.load_snapshot(snap_arg)
+        candles_by_time = {c.open_time_ms: c for c in candles}
+        now_ms = max(c.close_time_ms for c in candles) + 1000
+
+        with get_db_session() as session:
+            repo = SignalRepository(session)
+            service = SignalLifecycleService(repo)
+            unresolved = repo.get_unresolved_predictions()
+            print(f"Checking {len(unresolved)} unresolved signal(s) against snapshot {snap_arg.name}...")
+            matured_count = 0
+            for sig in unresolved:
+                res = service.mature_signal(sig, candles_by_time, now_ms=now_ms)
+                if res:
+                    matured_count += 1
+                    print(f"  Signal {sig.id}: status -> {res.status} (realized: {res.realized_label}, return: {res.realized_return})")
+            print(f"Matured {matured_count} signal(s).")
         return 0
     return 0
 

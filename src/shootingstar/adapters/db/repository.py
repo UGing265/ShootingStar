@@ -102,6 +102,24 @@ class SignalRepository:
         stmt = select(SignalOutcomeModel).where(SignalOutcomeModel.signal_id == signal_id)
         return self.session.scalars(stmt).first()
 
+    def list_predictions(self, limit: int = 50) -> List[SignalPredictionModel]:
+        stmt = (
+            select(SignalPredictionModel)
+            .order_by(SignalPredictionModel.prediction_time_ms.desc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def get_unresolved_predictions(self) -> List[SignalPredictionModel]:
+        """Returns predictions that have not yet matured to an outcome record."""
+        subquery = select(SignalOutcomeModel.signal_id)
+        stmt = (
+            select(SignalPredictionModel)
+            .where(SignalPredictionModel.id.not_in(subquery))
+            .order_by(SignalPredictionModel.prediction_time_ms.asc())
+        )
+        return list(self.session.scalars(stmt).all())
+
 
 class AuditLogRepository:
     def __init__(self, session: Session):
