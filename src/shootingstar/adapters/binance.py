@@ -40,10 +40,24 @@ class BinanceSpotClient:
         end_time_ms: Optional[int] = None,
         limit: int = 1000,
     ) -> List[List[Any]]:
-        """Fetches raw klines from Binance Spot API.
-        
-        Strictly observes IP weight limits and handles 429 backoff / 418 ban halting.
-        """
+        rows, _, _ = self.fetch_klines_with_raw(
+            symbol=symbol,
+            interval=interval,
+            start_time_ms=start_time_ms,
+            end_time_ms=end_time_ms,
+            limit=limit,
+        )
+        return rows
+
+    def fetch_klines_with_raw(
+        self,
+        symbol: str,
+        interval: str,
+        start_time_ms: int,
+        end_time_ms: Optional[int] = None,
+        limit: int = 1000,
+    ) -> Tuple[List[List[Any]], bytes, Dict[str, str]]:
+        """Fetches raw klines preserving exact HTTP response bytes and headers."""
         params: Dict[str, Any] = {
             "symbol": symbol,
             "interval": interval,
@@ -60,7 +74,6 @@ class BinanceSpotClient:
             for attempt in range(max_retries):
                 response = client.get(url, params=params)
 
-                # Track used weight if provided by Binance header
                 weight_header = response.headers.get("x-mbx-used-weight-1m")
                 if weight_header and weight_header.isdigit():
                     self.last_used_weight_1m = int(weight_header)
@@ -78,9 +91,9 @@ class BinanceSpotClient:
                     raise BinanceRateLimitError(f"HTTP 429: Rate limit exhausted after {max_retries} attempts.")
 
                 response.raise_for_status()
-                return response.json()
+                return response.json(), response.content, dict(response.headers)
 
-        return []
+        return [], b"[]", {}
 
     @staticmethod
     def parse_kline_row(row: List[Any], venue: str, symbol: str, timeframe: str) -> Candle:
