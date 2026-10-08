@@ -7,9 +7,17 @@ from sqlalchemy.orm import Session
 
 from shootingstar.adapters.db.models import (
     AuditLogModel,
+    CanonicalCandleModel,
     ExperimentModel,
+    ExperimentSplitModel,
     IngestionRunModel,
+    LabelRecordModel,
+    MetricReportModel,
     ModelArtifactModel,
+    PatternHitModel,
+    PatternRuleModel,
+    RejectedRecordModel,
+    ReviewOverrideModel,
     SignalOutcomeModel,
     SignalPredictionModel,
     SnapshotModel,
@@ -109,3 +117,114 @@ class AuditLogRepository:
         self.session.add(log)
         self.session.flush()
         return log
+
+
+class CanonicalCandleRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save(self, candle: CanonicalCandleModel) -> CanonicalCandleModel:
+        self.session.add(candle)
+        self.session.flush()
+        return candle
+
+    def get_range(self, venue: str, symbol: str, timeframe: str, start_ms: int, end_ms: int) -> List[CanonicalCandleModel]:
+        stmt = (
+            select(CanonicalCandleModel)
+            .where(
+                CanonicalCandleModel.venue == venue,
+                CanonicalCandleModel.symbol == symbol,
+                CanonicalCandleModel.timeframe == timeframe,
+                CanonicalCandleModel.open_time_ms >= start_ms,
+                CanonicalCandleModel.close_time_ms <= end_ms,
+            )
+            .order_by(CanonicalCandleModel.open_time_ms.asc())
+        )
+        return list(self.session.scalars(stmt).all())
+
+
+class RejectedRecordRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def record_rejection(
+        self,
+        venue: str,
+        symbol: str,
+        timeframe: str,
+        rejection_reason: str,
+        raw_payload_preview: str,
+        ingested_at_ms: int,
+        timestamp_ms: Optional[int] = None,
+    ) -> RejectedRecordModel:
+        rej = RejectedRecordModel(
+            venue=venue,
+            symbol=symbol,
+            timeframe=timeframe,
+            timestamp_ms=timestamp_ms,
+            rejection_reason=rejection_reason,
+            raw_payload_preview=raw_payload_preview,
+            ingested_at_ms=ingested_at_ms,
+        )
+        self.session.add(rej)
+        self.session.flush()
+        return rej
+
+
+class ExperimentSplitRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save(self, split: ExperimentSplitModel) -> ExperimentSplitModel:
+        self.session.add(split)
+        self.session.flush()
+        return split
+
+    def get_by_experiment_and_type(self, experiment_id: str, split_type: str) -> Optional[ExperimentSplitModel]:
+        stmt = select(ExperimentSplitModel).where(
+            ExperimentSplitModel.experiment_id == experiment_id,
+            ExperimentSplitModel.split_type == split_type,
+        )
+        return self.session.scalars(stmt).first()
+
+
+class LabelRecordRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save(self, label: LabelRecordModel) -> LabelRecordModel:
+        self.session.add(label)
+        self.session.flush()
+        return label
+
+    def get_labels_for_snapshot(self, snapshot_id: str) -> List[LabelRecordModel]:
+        stmt = select(LabelRecordModel).where(LabelRecordModel.snapshot_id == snapshot_id).order_by(LabelRecordModel.time_t_ms.asc())
+        return list(self.session.scalars(stmt).all())
+
+
+class MetricReportRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save(self, report: MetricReportModel) -> MetricReportModel:
+        self.session.add(report)
+        self.session.flush()
+        return report
+
+    def get_by_experiment(self, experiment_id: str) -> List[MetricReportModel]:
+        stmt = select(MetricReportModel).where(MetricReportModel.experiment_id == experiment_id)
+        return list(self.session.scalars(stmt).all())
+
+
+class ReviewOverrideRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save(self, override: ReviewOverrideModel) -> ReviewOverrideModel:
+        self.session.add(override)
+        self.session.flush()
+        return override
+
+    def get_by_signal_id(self, signal_id: str) -> List[ReviewOverrideModel]:
+        stmt = select(ReviewOverrideModel).where(ReviewOverrideModel.signal_id == signal_id).order_by(ReviewOverrideModel.created_at.desc())
+        return list(self.session.scalars(stmt).all())
