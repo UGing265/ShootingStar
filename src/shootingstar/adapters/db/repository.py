@@ -228,3 +228,34 @@ class ReviewOverrideRepository:
     def get_by_signal_id(self, signal_id: str) -> List[ReviewOverrideModel]:
         stmt = select(ReviewOverrideModel).where(ReviewOverrideModel.signal_id == signal_id).order_by(ReviewOverrideModel.created_at.desc())
         return list(self.session.scalars(stmt).all())
+
+
+class PatternRuleRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save(self, rule: PatternRuleModel) -> PatternRuleModel:
+        self.session.add(rule)
+        self.session.flush()
+        return rule
+
+    def get_by_id(self, rule_id: str) -> Optional[PatternRuleModel]:
+        return self.session.get(PatternRuleModel, rule_id)
+
+    def list_all(self) -> List[PatternRuleModel]:
+        stmt = select(PatternRuleModel).order_by(PatternRuleModel.created_at.asc())
+        return list(self.session.scalars(stmt).all())
+
+
+class PatternHitRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save(self, hit: PatternHitModel) -> PatternHitModel:
+        self.session.add(hit)
+        self.session.flush()
+        return hit
+
+    def get_hits_for_rule(self, rule_id: str) -> List[PatternHitModel]:
+        stmt = select(PatternHitModel).where(PatternHitModel.rule_id == rule_id).order_by(PatternHitModel.detected_time_ms.asc())
+        return list(self.session.scalars(stmt).all())

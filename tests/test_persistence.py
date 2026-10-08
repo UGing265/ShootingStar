@@ -20,6 +20,8 @@ from shootingstar.adapters.db.models import (
     IngestionRunModel,
     LabelRecordModel,
     MetricReportModel,
+    PatternHitModel,
+    PatternRuleModel,
     RejectedRecordModel,
     ReviewOverrideModel,
     SignalOutcomeModel,
@@ -28,8 +30,16 @@ from shootingstar.adapters.db.models import (
 )
 from shootingstar.adapters.db.repository import (
     AuditLogRepository,
+    CanonicalCandleRepository,
     ExperimentRepository,
+    ExperimentSplitRepository,
     IngestionRunRepository,
+    LabelRecordRepository,
+    MetricReportRepository,
+    PatternHitRepository,
+    PatternRuleRepository,
+    RejectedRecordRepository,
+    ReviewOverrideRepository,
     SignalRepository,
     SnapshotRepository,
 )
@@ -57,7 +67,8 @@ def db_session(migrated_test_engine):
         session.rollback()
 
 
-def test_canonical_candles_and_uniqueness(db_session: Session):
+def test_canonical_candle_repository(db_session: Session):
+    repo = CanonicalCandleRepository(db_session)
     open_time = 1700000000000
     c1 = CanonicalCandleModel(
         venue="BINANCE",
@@ -76,11 +87,14 @@ def test_canonical_candles_and_uniqueness(db_session: Session):
         taker_buy_quote_volume=250000.0,
         observed_ingested_at_ms=open_time + 300500,
     )
-    db_session.add(c1)
-    db_session.flush()
+    repo.save(c1)
 
-    # Invariant: Duplicate natural key must fail with IntegrityError
-    c1_duplicate = CanonicalCandleModel(
+    candles = repo.get_range("BINANCE", "BTCUSDT", "5m", open_time, open_time + 300000)
+    assert len(candles) >= 1
+    assert candles[0].close == 50050.0
+
+    # Test uniqueness
+    dup = CanonicalCandleModel(
         venue="BINANCE",
         symbol="BTCUSDT",
         timeframe="5m",
@@ -96,28 +110,26 @@ def test_canonical_candles_and_uniqueness(db_session: Session):
         taker_buy_base_volume=5.0,
         taker_buy_quote_volume=250000.0,
     )
-    db_session.add(c1_duplicate)
     with pytest.raises(IntegrityError):
-        db_session.flush()
+        repo.save(dup)
 
 
-def test_rejected_records_logging(db_session: Session):
-    rej = RejectedRecordModel(
+def test_rejected_record_repository(db_session: Session):
+    repo = RejectedRecordRepository(db_session)
+    rej = repo.record_rejection(
         venue="BINANCE",
         symbol="BTCUSDT",
         timeframe="5m",
-        timestamp_ms=1700000000000,
         rejection_reason="high < low invariant violation",
         raw_payload_preview="[1700000000000, 100, 90, 110, 105...]",
         ingested_at_ms=1700000301000,
+        timestamp_ms=1700000000000,
     )
-    db_session.add(rej)
-    db_session.flush()
     assert rej.id is not None
     assert rej.rejection_reason == "high < low invariant violation"
 
 
-def test_ingestion_run_and_snapshot_persistence(db_session: Session):
+def test_ingestion_run_and_snapshot_repositories(db_session: Session):
     run_repo = IngestionRunRepository(db_session)
     snap_repo = SnapshotRepository(db_session)
 
@@ -141,7 +153,8 @@ def test_ingestion_run_and_snapshot_persistence(db_session: Session):
     loaded_run = run_repo.get_by_id(run_id)
     assert loaded_run is not None
     assert loaded_run.valid_candles_count == 288
-    assert loaded_run.is_pristine is True
+    all_runs = run_repo.list_all(limit=10)
+    assert any(r.id == run_id for r in all_runs)
 
     snap_hash = uuid.uuid4().hex + uuid.uuid4().hex
     snapshot = SnapshotModel(
@@ -162,11 +175,16 @@ def test_ingestion_run_and_snapshot_persistence(db_session: Session):
     assert loaded_snap is not None
     assert loaded_snap.ingestion_run_id == run_id
     assert loaded_snap.candle_count == 288
+    all_snaps = snap_repo.list_all(limit=10)
+    assert any(s.id == snap_hash for s in all_snaps)
 
 
-def test_experiment_splits_labels_and_reports(db_session: Session):
+def test_experiment_split_label_and_metric_repositories(db_session: Session):
     snap_repo = SnapshotRepository(db_session)
     exp_repo = ExperimentRepository(db_session)
+    split_repo = ExperimentSplitRepository(db_session)
+    label_repo = LabelRecordRepository(db_session)
+    report_repo = MetricReportRepository(db_session)
 
     snap_hash = uuid.uuid4().hex + uuid.uuid4().hex
     snapshot = SnapshotModel(
@@ -191,8 +209,10 @@ def test_experiment_splits_labels_and_reports(db_session: Session):
         parameters_json='{"timeframe": "5m", "horizon": 30}',
     )
     exp_repo.save(exp)
+    assert exp_repo.get_by_id(exp_id) is not None
+    assert len(exp_repo.list_all()) >= 1
 
-    # 1. Experiment split
+    # Split
     split = ExperimentSplitModel(
         experiment_id=exp_id,
         split_type="TRAIN",
@@ -200,9 +220,12 @@ def test_experiment_splits_labels_and_reports(db_session: Session):
         end_time_ms=1700050000000,
         sample_count=200,
     )
-    db_session.add(split)
+    split_repo.save(split)
+    loaded_split = split_repo.get_by_experiment_and_type(exp_id, "TRAIN")
+    assert loaded_split is not None
+    assert loaded_split.sample_count == 200
 
-    # 2. Label record
+    # Label
     label = LabelRecordModel(
         snapshot_id=snap_hash,
         timeframe="5m",
@@ -212,11 +235,14 @@ def test_experiment_splits_labels_and_reports(db_session: Session):
         price_at_t_plus_horizon=50300.0,
         return_30m=0.006,
         direction_label="UP",
-        cost_adjusted_label=None,  # Gated until cost method approved
+        cost_adjusted_label=None,
     )
-    db_session.add(label)
+    label_repo.save(label)
+    labels = label_repo.get_labels_for_snapshot(snap_hash)
+    assert len(labels) == 1
+    assert labels[0].direction_label == "UP"
 
-    # 3. Metric report
+    # Report
     report = MetricReportModel(
         experiment_id=exp_id,
         split_type="TEST",
@@ -224,18 +250,17 @@ def test_experiment_splits_labels_and_reports(db_session: Session):
         metrics_json='{"accuracy": 0.53, "precision_up": 0.54, "brier_score": 0.24}',
         calibration_json='{"bins": [0.1, 0.2, 0.3], "empirical": [0.12, 0.21, 0.29]}',
     )
-    db_session.add(report)
-    db_session.flush()
-
-    assert split.id is not None
-    assert label.direction_label == "UP"
-    assert report.split_type == "TEST"
+    report_repo.save(report)
+    reports = report_repo.get_by_experiment(exp_id)
+    assert len(reports) == 1
+    assert reports[0].report_type == "OUT_OF_SAMPLE_WALK_FORWARD"
 
 
-def test_signal_append_only_and_review_override(db_session: Session):
+def test_signal_and_review_override_repositories(db_session: Session):
     snap_repo = SnapshotRepository(db_session)
     exp_repo = ExperimentRepository(db_session)
     sig_repo = SignalRepository(db_session)
+    rev_repo = ReviewOverrideRepository(db_session)
 
     snap_hash = uuid.uuid4().hex + uuid.uuid4().hex
     snapshot = SnapshotModel(
@@ -277,6 +302,7 @@ def test_signal_append_only_and_review_override(db_session: Session):
         decision_reason="Probability threshold met",
     )
     sig_repo.save_prediction(pred)
+    assert sig_repo.get_prediction_by_id(sig_id) is not None
 
     # Separate outcome
     outcome = SignalOutcomeModel(
@@ -288,22 +314,57 @@ def test_signal_append_only_and_review_override(db_session: Session):
         is_match=True,
     )
     sig_repo.save_outcome(outcome)
+    assert sig_repo.get_outcome_by_signal_id(sig_id) is not None
 
-    # Reviewer override audit record
+    # Review override
     override = ReviewOverrideModel(
         signal_id=sig_id,
         reviewer_id="human_operator_1",
         override_decision="STAND_ASIDE",
         notes="High macro volatility window observed",
     )
-    db_session.add(override)
-    db_session.flush()
+    rev_repo.save(override)
+    overrides = rev_repo.get_by_signal_id(sig_id)
+    assert len(overrides) == 1
+    assert overrides[0].override_decision == "STAND_ASIDE"
 
-    assert override.id is not None
-    assert override.override_decision == "STAND_ASIDE"
+
+def test_pattern_rule_and_hit_repositories(db_session: Session):
+    rule_repo = PatternRuleRepository(db_session)
+    hit_repo = PatternHitRepository(db_session)
+
+    rule_id = "rule_shooting_star_v1"
+    rule = PatternRuleModel(
+        id=rule_id,
+        name="Shooting Star",
+        version=1,
+        description="Upper shadow >= 2x real body, small lower shadow, prior uptrend",
+        definition_json='{"upper_wick_ratio": 2.0, "body_ratio_max": 0.3}',
+    )
+    rule_repo.save(rule)
+
+    loaded_rule = rule_repo.get_by_id(rule_id)
+    assert loaded_rule is not None
+    assert loaded_rule.name == "Shooting Star"
+    assert len(rule_repo.list_all()) >= 1
+
+    # Record hit
+    hit = PatternHitModel(
+        rule_id=rule_id,
+        detected_time_ms=1700000000000,
+        symbol="BTCUSDT",
+        timeframe="5m",
+        outcome_return_30m=-0.008,
+        outcome_label="DOWN",
+    )
+    hit_repo.save(hit)
+
+    hits = hit_repo.get_hits_for_rule(rule_id)
+    assert len(hits) == 1
+    assert hits[0].outcome_label == "DOWN"
 
 
-def test_audit_log_append_only(db_session: Session):
+def test_audit_log_repository(db_session: Session):
     audit_repo = AuditLogRepository(db_session)
     log = audit_repo.record(
         entity_type="EXPERIMENT",
