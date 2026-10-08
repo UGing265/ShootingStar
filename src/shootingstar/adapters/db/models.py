@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -24,6 +25,46 @@ def utc_now() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+class CanonicalCandleModel(Base):
+    __tablename__ = "canonical_candles"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    venue = Column(String(32), nullable=False, default="BINANCE")
+    symbol = Column(String(32), nullable=False)
+    timeframe = Column(String(16), nullable=False)
+    open_time_ms = Column(BigInteger, nullable=False)
+    close_time_ms = Column(BigInteger, nullable=False)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+    quote_volume = Column(Float, nullable=False)
+    trades_count = Column(Integer, nullable=False)
+    taker_buy_base_volume = Column(Float, nullable=False)
+    taker_buy_quote_volume = Column(Float, nullable=False)
+    observed_ingested_at_ms = Column(BigInteger, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("venue", "symbol", "timeframe", "open_time_ms", name="uq_canonical_candle"),
+        Index("ix_canonical_candle_open_time", "open_time_ms"),
+    )
+
+
+class RejectedRecordModel(Base):
+    __tablename__ = "rejected_records"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    venue = Column(String(32), nullable=False, default="BINANCE")
+    symbol = Column(String(32), nullable=False)
+    timeframe = Column(String(16), nullable=False)
+    timestamp_ms = Column(BigInteger, nullable=True)
+    rejection_reason = Column(String(256), nullable=False)
+    raw_payload_preview = Column(String(512), nullable=False)
+    ingested_at_ms = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
 class IngestionRunModel(Base):
@@ -63,6 +104,7 @@ class SnapshotModel(Base):
 
     ingestion_run = relationship("IngestionRunModel", back_populates="snapshots")
     experiments = relationship("ExperimentModel", back_populates="snapshot")
+    labels = relationship("LabelRecordModel", back_populates="snapshot")
 
 
 class ExperimentModel(Base):
@@ -76,8 +118,42 @@ class ExperimentModel(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     snapshot = relationship("SnapshotModel", back_populates="experiments")
+    splits = relationship("ExperimentSplitModel", back_populates="experiment")
     artifacts = relationship("ModelArtifactModel", back_populates="experiment")
+    reports = relationship("MetricReportModel", back_populates="experiment")
     predictions = relationship("SignalPredictionModel", back_populates="experiment")
+
+
+class ExperimentSplitModel(Base):
+    __tablename__ = "experiment_splits"
+
+    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    experiment_id = Column(String(64), ForeignKey("experiments.id"), nullable=False)
+    split_type = Column(String(32), nullable=False)  # TRAIN, CALIBRATION, VALIDATION, TEST
+    start_time_ms = Column(BigInteger, nullable=False)
+    end_time_ms = Column(BigInteger, nullable=False)
+    sample_count = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    experiment = relationship("ExperimentModel", back_populates="splits")
+
+
+class LabelRecordModel(Base):
+    __tablename__ = "label_records"
+
+    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    snapshot_id = Column(String(64), ForeignKey("snapshots.id"), nullable=False)
+    timeframe = Column(String(16), nullable=False)
+    time_t_ms = Column(BigInteger, nullable=False, index=True)
+    horizon_minutes = Column(Integer, nullable=False, default=30)
+    price_at_t = Column(Float, nullable=False)
+    price_at_t_plus_horizon = Column(Float, nullable=False)
+    return_30m = Column(Float, nullable=False)
+    direction_label = Column(String(16), nullable=False)  # UP, DOWN
+    cost_adjusted_label = Column(String(16), nullable=True)  # UP, DOWN, NO_TRADE
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    snapshot = relationship("SnapshotModel", back_populates="labels")
 
 
 class ModelArtifactModel(Base):
@@ -94,11 +170,22 @@ class ModelArtifactModel(Base):
     experiment = relationship("ExperimentModel", back_populates="artifacts")
 
 
+class MetricReportModel(Base):
+    __tablename__ = "metric_reports"
+
+    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    experiment_id = Column(String(64), ForeignKey("experiments.id"), nullable=False)
+    split_type = Column(String(32), nullable=False)
+    report_type = Column(String(64), nullable=False)
+    metrics_json = Column(Text, nullable=False)
+    calibration_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    experiment = relationship("ExperimentModel", back_populates="reports")
+
+
 class SignalPredictionModel(Base):
-    """IMMUTABLE APPEND-ONLY PREDICTION RECORD.
-    
-    INVARIANT: Once written, never updated or deleted.
-    """
+    """IMMUTABLE APPEND-ONLY PREDICTION RECORD."""
     __tablename__ = "signal_predictions"
 
     id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -110,13 +197,14 @@ class SignalPredictionModel(Base):
     probability_up = Column(Float, nullable=False)
     probability_down = Column(Float, nullable=False)
     probability_no_trade = Column(Float, nullable=False)
-    predicted_class = Column(String(16), nullable=False)  # UP, DOWN, NO_TRADE
-    decision = Column(String(16), nullable=False)  # UP, DOWN, NO_TRADE (separate policy decision)
+    predicted_class = Column(String(16), nullable=False)
+    decision = Column(String(16), nullable=False)
     decision_reason = Column(String(256), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     experiment = relationship("ExperimentModel", back_populates="predictions")
     outcome = relationship("SignalOutcomeModel", back_populates="prediction", uselist=False)
+    review_overrides = relationship("ReviewOverrideModel", back_populates="prediction")
 
 
 class SignalOutcomeModel(Base):
@@ -125,7 +213,7 @@ class SignalOutcomeModel(Base):
 
     id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
     signal_id = Column(String(64), ForeignKey("signal_predictions.id"), nullable=False, unique=True)
-    status = Column(String(24), nullable=False)  # EVALUATED, UNSCORABLE
+    status = Column(String(24), nullable=False)
     evaluated_at_ms = Column(BigInteger, nullable=False)
     realized_return = Column(Float, nullable=True)
     realized_label = Column(String(16), nullable=True)
@@ -134,6 +222,19 @@ class SignalOutcomeModel(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     prediction = relationship("SignalPredictionModel", back_populates="outcome")
+
+
+class ReviewOverrideModel(Base):
+    __tablename__ = "review_overrides"
+
+    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    signal_id = Column(String(64), ForeignKey("signal_predictions.id"), nullable=False)
+    reviewer_id = Column(String(64), nullable=False)
+    override_decision = Column(String(16), nullable=False)
+    notes = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    prediction = relationship("SignalPredictionModel", back_populates="review_overrides")
 
 
 class PatternRuleModel(Base):
