@@ -57,6 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
     # Command: mature-signals
     mature_parser = subparsers.add_parser("mature-signals", help="Evaluate pending signals against closed snapshot candles")
     mature_parser.add_argument("--snapshot", required=True, help="Snapshot file path or SHA-256 hash containing recent candles")
+    # Command: serve
+    serve_parser = subparsers.add_parser("serve", help="Launch the ShootingStar Research Platform web server")
+    serve_parser.add_argument("--host", default="127.0.0.1", help="Host interface (default: 127.0.0.1)")
+    serve_parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
 
     return parser
 
@@ -301,6 +305,14 @@ def main(argv=None) -> int:
                     matured_count += 1
                     print(f"  Signal {sig.id}: status -> {res.status} (realized: {res.realized_label}, return: {res.realized_return})")
             print(f"Matured {matured_count} signal(s).")
+        return 0
+
+    if args.command == "serve":
+        import uvicorn
+        from shootingstar.api.app import app
+
+        print(f"Starting ShootingStar Research Platform on http://{args.host}:{args.port}")
+        uvicorn.run(app, host=args.host, port=args.port)
         return 0
     return 0
 
