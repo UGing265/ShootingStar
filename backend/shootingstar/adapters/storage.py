@@ -95,6 +95,7 @@ class SnapshotStorage:
         ("taker_buy_base_volume", pa.float64()),
         ("taker_buy_quote_volume", pa.float64()),
         ("observed_ingested_at_ms", pa.int64()),
+        ("is_backfill", pa.bool_()),
     ])
 
     def __init__(self, snapshots_dir: Optional[Path] = None):
@@ -136,6 +137,7 @@ class SnapshotStorage:
                 c.observed_ingested_at_ms if c.observed_ingested_at_ms is not None else -1
                 for c in sorted_candles
             ],
+            "is_backfill": [bool(c.is_backfill) for c in sorted_candles],
         }
 
         table = pa.Table.from_pydict(columns, schema=self.SCHEMA)
@@ -163,10 +165,16 @@ class SnapshotStorage:
         table = pq.read_table(path)
         pydict = table.to_pydict()
         count = len(pydict["open_time_ms"])
+        has_backfill = "is_backfill" in pydict
 
         candles = []
         for i in range(count):
             ingested_at = pydict["observed_ingested_at_ms"][i]
+            is_backfill = (
+                bool(pydict["is_backfill"][i])
+                if has_backfill
+                else (ingested_at == -1 or ingested_at > pydict["close_time_ms"][i] + 60000)
+            )
             candles.append(
                 Candle(
                     venue=pydict["venue"][i],
@@ -184,6 +192,7 @@ class SnapshotStorage:
                     taker_buy_base_volume=pydict["taker_buy_base_volume"][i],
                     taker_buy_quote_volume=pydict["taker_buy_quote_volume"][i],
                     observed_ingested_at_ms=ingested_at if ingested_at != -1 else None,
+                    is_backfill=is_backfill,
                 )
             )
         return candles

@@ -11,13 +11,13 @@ class TargetLabel:
     candle_index: int
     open_time_t_ms: int
     close_time_t_ms: int
+    entry_time_ms: int
     horizon_minutes: int
     entry_price: float
     target_price: float
     return_30m: float
     direction_label: str  # "UP" or "DOWN" or "FLAT"
     cost_adjusted_label: Optional[str]  # None until slippage methodology is approved
-
 
 class LabelGenerationService:
     """Generates directional forward target returns for 30-minute research."""
@@ -62,9 +62,10 @@ class LabelGenerationService:
                 # Conservative: enter at open of candle (i + 1) following availability at t
                 c_entry = sorted_candles[i + 1]
                 entry_p = c_entry.open
+                entry_time = c_entry.open_time_ms
             else:
                 entry_p = c_t.close
-
+                entry_time = c_t.close_time_ms
             target_p = c_target.close
             ret_30m = (target_p - entry_p) / entry_p
 
@@ -80,6 +81,7 @@ class LabelGenerationService:
                     candle_index=i,
                     open_time_t_ms=c_t.open_time_ms,
                     close_time_t_ms=c_t.close_time_ms,
+                    entry_time_ms=entry_time,
                     horizon_minutes=self.horizon_minutes,
                     entry_price=entry_p,
                     target_price=target_p,

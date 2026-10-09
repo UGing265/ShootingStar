@@ -46,7 +46,7 @@ class CanonicalCandleModel(Base):
     taker_buy_base_volume = Column(Float, nullable=False)
     taker_buy_quote_volume = Column(Float, nullable=False)
     observed_ingested_at_ms = Column(BigInteger, nullable=True)
-
+    is_backfill = Column(Boolean, nullable=False, default=False)
     __table_args__ = (
         UniqueConstraint("venue", "symbol", "timeframe", "open_time_ms", name="uq_canonical_candle"),
         Index("ix_canonical_candle_open_time", "open_time_ms"),

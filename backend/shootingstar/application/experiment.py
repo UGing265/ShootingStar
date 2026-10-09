@@ -1,20 +1,27 @@
 """Experiment runner coordinating features, splits, model training, evaluation, and DB provenance."""
 
+import hashlib
 import json
+import logging
+import os
 from pathlib import Path
 from typing import Optional, Tuple
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from shootingstar.adapters.db.models import (
     ExperimentModel,
     ExperimentSplitModel,
     MetricReportModel,
     ModelArtifactModel,
+    SnapshotModel,
 )
 from shootingstar.adapters.db.repository import (
     ExperimentRepository,
     ExperimentSplitRepository,
     MetricReportRepository,
+    ModelArtifactRepository,
     SnapshotRepository,
 )
 from shootingstar.adapters.db.session import get_db_session
@@ -34,13 +41,14 @@ class ExperimentRunner:
         snapshot_storage: Optional[SnapshotStorage] = None,
         models_dir: Optional[Path] = None,
         reports_dir: Optional[Path] = None,
+        assumed_latency_ms: int = 1,
     ):
         self.snapshot_storage = snapshot_storage or SnapshotStorage()
         self.models_dir = models_dir or Path("data/models")
         self.reports_dir = reports_dir or Path("data/reports")
+        self.assumed_latency_ms = assumed_latency_ms
         self.models_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
-
     def run_experiment(
         self,
         snapshot_path: Path,
@@ -57,10 +65,13 @@ class ExperimentRunner:
         timeframe = candles[0].timeframe
 
         # 2. Extract features and labels
-        label_service = LabelGenerationService(horizon_minutes=30)
+        label_service = LabelGenerationService(
+            horizon_minutes=30,
+            assumed_latency_ms=self.assumed_latency_ms,
+        )
         labels = label_service.generate_labels(candles)
 
-        feature_service = FeatureExtractionService()
+        feature_service = FeatureExtractionService(assumed_latency_ms=self.assumed_latency_ms)
         feat_matrix = feature_service.extract_matrix(candles)
 
         # 3. Align features and labels by candle open_time
@@ -70,15 +81,18 @@ class ExperimentRunner:
         aligned_returns = []
         aligned_times = []
 
-        for i, t in enumerate(feat_matrix.timestamps_ms):
-            if t in label_map:
-                lbl = label_map[t]
+        for i, open_t in enumerate(feat_matrix.candle_open_times_ms):
+            if open_t in label_map:
+                lbl = label_map[open_t]
+                avail_t = feat_matrix.timestamps_ms[i]
+                # Strict causal contract: feature must be available at or before trade entry time
+                if lbl.entry_time_ms < avail_t:
+                    continue
                 if lbl.direction_label in ("UP", "DOWN"):
                     aligned_X.append(feat_matrix.values[i])
                     aligned_y.append(1 if lbl.direction_label == "UP" else 0)
                     aligned_returns.append(lbl.return_30m)
-                    aligned_times.append(t)
-
+                    aligned_times.append(avail_t)
         X = np.array(aligned_X, dtype=np.float64)
         y = np.array(aligned_y, dtype=int)
         returns = np.array(aligned_returns, dtype=np.float64)
@@ -86,8 +100,8 @@ class ExperimentRunner:
         if len(X) < 100:
             raise ValueError(f"Insufficient aligned samples ({len(X)}) for walk-forward evaluation")
 
-        # 4. Chronological 4-way split with anti-leakage gap
-        splitter = WalkForwardSplitter()
+        # 4. Chronological 4-way split with anti-leakage gap derived from timeframe and horizon
+        splitter = WalkForwardSplitter.for_timeframe(timeframe=timeframe, horizon_minutes=30)
         splits = splitter.split(aligned_times)
 
         # Extract subsets
@@ -109,20 +123,21 @@ class ExperimentRunner:
         artifact_path, artifact_hash = model.save_artifact(self.models_dir, experiment_id)
 
         # 7. Generate evaluation report on held-out test window
+        full_sha256 = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
         report = EvaluationReportGenerator.generate_report(
             model=model,
             X_test=X_test,
             y_test=y_test,
             returns_test=returns_test,
             experiment_id=experiment_id,
-            snapshot_sha256=snapshot_path.stem.split("_")[-1],
+            snapshot_sha256=full_sha256,
             symbol=symbol,
             timeframe=timeframe,
             horizon_minutes=30,
             test_start_time_ms=splits.test.start_time_ms,
             test_end_time_ms=splits.test.end_time_ms,
+            y_train=y_train,
         )
-
         # Write reports
         report_md_path = self.reports_dir / f"{experiment_id}_report.md"
         report_json_path = self.reports_dir / f"{experiment_id}_report.json"
@@ -138,7 +153,20 @@ class ExperimentRunner:
                 snap_repo = SnapshotRepository(session)
 
                 snapshot_obj = snap_repo.get_by_sha256(report.snapshot_sha256)
-                snap_id = snapshot_obj.id if snapshot_obj else report.snapshot_sha256
+                if not snapshot_obj:
+                    snapshot_obj = SnapshotModel(
+                        id=report.snapshot_sha256,
+                        venue="BINANCE",
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        start_time_ms=candles[0].open_time_ms,
+                        end_time_ms=candles[-1].close_time_ms,
+                        candle_count=len(candles),
+                        file_path=str(snapshot_path),
+                        sha256=report.snapshot_sha256,
+                    )
+                    snap_repo.save(snapshot_obj)
+                snap_id = snapshot_obj.id
 
                 # Create experiment record
                 exp_record = ExperimentModel(
@@ -151,6 +179,8 @@ class ExperimentRunner:
                         "timeframe": timeframe,
                         "horizon_minutes": 30,
                         "model": "CalibratedLogisticRegression",
+                        "assumed_latency_ms": self.assumed_latency_ms,
+                        "availability_contract": "PROVENANCED_LATENCY_GATED",
                     }),
                 )
                 exp_repo.save(exp_record)
@@ -167,16 +197,33 @@ class ExperimentRunner:
                     split_repo.save(split_rec)
 
                 # Save metric report record
+                metrics_dict = dict(report.to_dict()["directional_metrics"])
+                metrics_dict["assumed_latency_ms"] = self.assumed_latency_ms
                 rep_rec = MetricReportModel(
                     experiment_id=experiment_id,
                     split_type="TEST",
                     report_type="OUT_OF_SAMPLE_WALK_FORWARD",
-                    metrics_json=json.dumps(report.to_dict()["directional_metrics"]),
+                    metrics_json=json.dumps(metrics_dict),
                     calibration_json=json.dumps(report.to_dict()["calibration_bins"]),
                 )
                 rep_repo.save(rep_rec)
+
+                # Save model artifact record
+                art_repo = ModelArtifactRepository(session)
+                existing_art = art_repo.get_by_id(artifact_hash)
+                if not existing_art:
+                    art_rec = ModelArtifactModel(
+                        id=artifact_hash,
+                        experiment_id=experiment_id,
+                        model_type="CalibratedLogisticRegression",
+                        artifact_path=str(artifact_path),
+                        artifact_hash=artifact_hash,
+                        metrics_json=json.dumps(metrics_dict),
+                    )
+                    art_repo.save(art_rec)
         except Exception as e:
-            # If database not available or not linked to this test snapshot, continue
-            pass
+            logger.warning("DB persistence failed for experiment %s: %s", experiment_id, e)
+            if os.environ.get("SHOOTINGSTAR_DATABASE_URL"):
+                raise
 
         return report, artifact_path, artifact_hash

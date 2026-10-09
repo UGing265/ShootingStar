@@ -47,6 +47,27 @@ class WalkForwardSplitter:
         self.test_ratio = test_ratio
         self.purge_gap_samples = purge_gap_samples
 
+    @classmethod
+    def for_timeframe(
+        cls,
+        timeframe: str,
+        horizon_minutes: int = 30,
+        train_ratio: float = 0.50,
+        calibration_ratio: float = 0.15,
+        validation_ratio: float = 0.15,
+        test_ratio: float = 0.20,
+    ) -> "WalkForwardSplitter":
+        """Calculates exact purge_gap_samples to prevent label lookahead leakage."""
+        tf_mins = 1 if timeframe == "1m" else 5
+        gap = max(1, horizon_minutes // tf_mins)
+        return cls(
+            train_ratio=train_ratio,
+            calibration_ratio=calibration_ratio,
+            validation_ratio=validation_ratio,
+            test_ratio=test_ratio,
+            purge_gap_samples=gap,
+        )
+
     def split(self, timestamps_ms: List[int]) -> ExperimentSplits:
         n = len(timestamps_ms)
         min_required = (self.purge_gap_samples * 3) + 40

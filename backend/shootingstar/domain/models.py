@@ -56,6 +56,7 @@ class Candle:
     taker_buy_base_volume: float
     taker_buy_quote_volume: float
     observed_ingested_at_ms: Optional[int] = None
+    is_backfill: bool = False
 
     def __post_init__(self) -> None:
         from shootingstar.domain.exceptions import InvalidCandleError
@@ -106,15 +107,15 @@ class Candle:
         """Returns the timestamp when this candle was actually available or assumed available.
         
         Rules:
-        - If observed live, returns the real receipt time (observed_ingested_at_ms).
-        - If backfilled (observed_ingested_at_ms is None), requires an explicit assumed_latency_ms > 0.
+        - If backfilled (is_backfill is True or observed_ingested_at_ms is None), requires assumed_latency_ms > 0.
+        - If observed live (is_backfill is False and observed_ingested_at_ms is not None), returns observed_ingested_at_ms.
         - If assumed_latency_ms is None or <= 0 for backfilled candle, returns None (availability unknown).
         """
-        if self.observed_ingested_at_ms is not None:
-            return self.observed_ingested_at_ms
-        if assumed_latency_ms is None or assumed_latency_ms <= 0:
-            return None
-        return self.close_time_ms + assumed_latency_ms
+        if self.is_backfill or self.observed_ingested_at_ms is None:
+            if assumed_latency_ms is None or assumed_latency_ms <= 0:
+                return None
+            return self.close_time_ms + assumed_latency_ms
+        return self.observed_ingested_at_ms
 
     def is_available_at(self, timestamp_ms: int, assumed_latency_ms: Optional[int] = None) -> bool:
         """Determines if the candle was available to an observer at timestamp_ms.

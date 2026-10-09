@@ -138,6 +138,7 @@ class EvaluationReportGenerator:
         horizon_minutes: int,
         test_start_time_ms: int,
         test_end_time_ms: int,
+        y_train: np.ndarray,
     ) -> EvaluationReport:
         proba = model.predict_proba(X_test)
         p_up = proba[:, 1]
@@ -220,7 +221,7 @@ class EvaluationReportGenerator:
         })
 
         for b in baselines_list:
-            b.fit(y_test)
+            b.fit(y_train)
             res = BaselineEvaluator.evaluate(b, X_test, y_test, returns_test)
             baseline_comparisons.append({
                 "name": res.name,

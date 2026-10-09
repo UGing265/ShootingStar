@@ -252,7 +252,6 @@ def main(argv=None) -> int:
 
     if args.command == "list-signals":
         from shootingstar.adapters.db.repository import SignalRepository
-        from shootingstar.adapters.db.session import get_db_session
 
         with get_db_session() as session:
             repo = SignalRepository(session)
@@ -276,7 +275,6 @@ def main(argv=None) -> int:
         from pathlib import Path
         from shootingstar.adapters.storage import SnapshotStorage
         from shootingstar.adapters.db.repository import SignalRepository
-        from shootingstar.adapters.db.session import get_db_session
         from shootingstar.application.signals import SignalLifecycleService
 
         snap_arg = Path(args.snapshot)

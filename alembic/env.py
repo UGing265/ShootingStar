@@ -14,6 +14,10 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+import os
+import sys
+sys.path.insert(0, os.path.abspath("backend"))
+
 from shootingstar.adapters.db.models import Base
 from shootingstar.adapters.db.session import get_database_url
 

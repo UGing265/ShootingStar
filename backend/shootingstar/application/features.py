@@ -15,9 +15,9 @@ from shootingstar.domain.models import Candle
 @dataclass(frozen=True)
 class FeatureMatrix:
     feature_names: List[str]
-    timestamps_ms: List[int]
+    timestamps_ms: List[int]  # Effective availability timestamps (effective_available_at_ms)
+    candle_open_times_ms: List[int]  # Originating candle open times
     values: np.ndarray  # Shape: (N, num_features)
-
 
 class FeatureExtractionService:
     """Computes technical, structural, and momentum features strictly causally."""
@@ -40,6 +40,9 @@ class FeatureExtractionService:
     ]
 
     WARMUP_PERIODS = 65  # Requires at least 65 bars for SMA(60) and 24-bar volatility
+
+    def __init__(self, assumed_latency_ms: Optional[int] = 1000):
+        self.assumed_latency_ms = assumed_latency_ms
 
     @classmethod
     def compute_features_at_index(cls, candles: List[Candle], index: int) -> Optional[List[float]]:
@@ -125,23 +128,32 @@ class FeatureExtractionService:
     def extract_matrix(self, candles: List[Candle]) -> FeatureMatrix:
         sorted_candles = sorted(candles, key=lambda c: c.open_time_ms)
         rows: List[List[float]] = []
-        timestamps: List[int] = []
+        avail_timestamps: List[int] = []
+        open_timestamps: List[int] = []
 
         for i in range(len(sorted_candles)):
             vec = self.compute_features_at_index(sorted_candles, i)
             if vec is not None:
+                # Causal contract: determine effective availability
+                avail_ms = sorted_candles[i].effective_available_at_ms(assumed_latency_ms=self.assumed_latency_ms)
+                if avail_ms is None:
+                    # Invariant: drop unknown availability rows (never fall back to open_time_ms!)
+                    continue
                 rows.append(vec)
-                timestamps.append(sorted_candles[i].open_time_ms)
+                avail_timestamps.append(avail_ms)
+                open_timestamps.append(sorted_candles[i].open_time_ms)
 
         if not rows:
             return FeatureMatrix(
                 feature_names=self.FEATURE_NAMES,
                 timestamps_ms=[],
+                candle_open_times_ms=[],
                 values=np.empty((0, len(self.FEATURE_NAMES)), dtype=np.float64),
             )
 
         return FeatureMatrix(
             feature_names=self.FEATURE_NAMES,
-            timestamps_ms=timestamps,
+            timestamps_ms=avail_timestamps,
+            candle_open_times_ms=open_timestamps,
             values=np.array(rows, dtype=np.float64),
         )

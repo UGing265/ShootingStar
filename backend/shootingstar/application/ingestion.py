@@ -131,7 +131,8 @@ class PilotIngestionService:
                     trades_count=candle.trades_count,
                     taker_buy_base_volume=candle.taker_buy_base_volume,
                     taker_buy_quote_volume=candle.taker_buy_quote_volume,
-                    observed_ingested_at_ms=ingested_receipt_ms,
+                    observed_ingested_at_ms=None,
+                    is_backfill=True,
                 )
 
                 # Strictly drop out-of-bound or forming candles
@@ -153,20 +154,17 @@ class PilotIngestionService:
         if not all_candles:
             raise DomainError(f"No valid candles obtained for {symbol} {tf.value} in target window.")
 
-        # 3. Inspect quality
+        # 3. Inspect quality across requested window
         sorted_candles = sorted(all_candles, key=lambda c: c.open_time_ms)
-        first_ms = sorted_candles[0].open_time_ms
-        last_ms = sorted_candles[-1].close_time_ms
 
         report = QualityInspectorService.inspect(
             candles=sorted_candles,
             venue="BINANCE",
             symbol=symbol,
             timeframe=tf,
-            start_time_ms=first_ms,
-            end_time_ms=last_ms,
+            start_time_ms=target_start_ms,
+            end_time_ms=target_end_ms,
         )
-
         # 4. Save immutable snapshot
         snapshot_path, snapshot_sha256 = self.snapshot_storage.save_snapshot(
             candles=sorted_candles,
@@ -224,7 +222,8 @@ class PilotIngestionService:
                     trades_count=candle.trades_count,
                     taker_buy_base_volume=candle.taker_buy_base_volume,
                     taker_buy_quote_volume=candle.taker_buy_quote_volume,
-                    observed_ingested_at_ms=receipt_ms,
+                    observed_ingested_at_ms=None,
+                    is_backfill=True,
                 )
                 if candle.open_time_ms < start_time_ms or candle.close_time_ms > end_time_ms:
                     continue

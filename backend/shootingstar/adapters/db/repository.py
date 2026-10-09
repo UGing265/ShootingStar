@@ -234,6 +234,22 @@ class MetricReportRepository:
         return list(self.session.scalars(stmt).all())
 
 
+class ModelArtifactRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save(self, artifact: ModelArtifactModel) -> ModelArtifactModel:
+        self.session.add(artifact)
+        self.session.flush()
+        return artifact
+
+    def get_by_id(self, artifact_id: str) -> Optional[ModelArtifactModel]:
+        return self.session.get(ModelArtifactModel, artifact_id)
+
+    def get_by_experiment(self, experiment_id: str) -> List[ModelArtifactModel]:
+        stmt = select(ModelArtifactModel).where(ModelArtifactModel.experiment_id == experiment_id)
+        return list(self.session.scalars(stmt).all())
+
 class ReviewOverrideRepository:
     def __init__(self, session: Session):
         self.session = session
