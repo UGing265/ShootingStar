@@ -1,5 +1,7 @@
 # Research Report: exp_pilot_5m_lr
 
+> **TRẠNG THÁI: BÁO CÁO PILOT CŨ — CHƯA XÁC MINH THEO BỘ QUY TẮC CAUSAL VÀ DYNAMIC PURGE MỚI. KHÔNG COI LÀ EDGE HAY KẾT QUẢ ĐÃ PHÊ DUYỆT.**
+
 ## 1. Setup & Horizon
 - **Symbol:** BTCUSDT
 - **Timeframe:** 5m
