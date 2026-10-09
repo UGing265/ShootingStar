@@ -36,6 +36,7 @@ export default async function DataPage(props: DataPageProps) {
 
   let quality: SnapshotQualityResponse | null = null;
   let candles: CandleDTO[] = [];
+  let detailError: string | null = null;
 
   if (targetSnapshotId) {
     const [qualRes, candlesRes] = await Promise.all([
@@ -44,9 +45,9 @@ export default async function DataPage(props: DataPageProps) {
     ]);
     quality = qualRes.data;
     candles = candlesRes.data || [];
+    detailError = qualRes.error || candlesRes.error;
   }
 
-  const hasError = runsRes.error || snapshotsRes.error;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
@@ -57,7 +58,9 @@ export default async function DataPage(props: DataPageProps) {
         </p>
       </div>
 
-      {hasError && <ErrorBanner message={runsRes.error || snapshotsRes.error || 'Không tải được dữ liệu giá đã lưu'} />}
+      {(runsRes.error || snapshotsRes.error || detailError) && (
+        <ErrorBanner message={runsRes.error || snapshotsRes.error || detailError || 'Không tải được dữ liệu giá đã lưu'} />
+      )}
 
       {quality && <QualityCard quality={quality} />}
 

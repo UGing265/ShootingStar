@@ -67,7 +67,7 @@ export default async function OverviewPage() {
 
         <Card>
           <div className="stat-label">Bản dữ liệu gần đây (tối đa 5)</div>
-          <div className="stat-value">{snapshotsRes.error ? 'Không có dữ liệu' : snapshots.length}</div>
+          <div className="stat-value">{snapshotsRes.error ? 'Không tải được' : snapshots.length}</div>
           <div className="stat-subtext">
             <Link href="/data">Xem lịch sử giá →</Link>
           </div>
@@ -75,7 +75,7 @@ export default async function OverviewPage() {
 
         <Card>
           <div className="stat-label">Thử nghiệm gần đây (tối đa 5)</div>
-          <div className="stat-value">{experimentsRes.error ? 'Không có dữ liệu' : experiments.length}</div>
+          <div className="stat-value">{experimentsRes.error ? 'Không tải được' : experiments.length}</div>
           <div className="stat-subtext">
             <Link href="/research">Xem kết quả thử nghiệm →</Link>
           </div>
