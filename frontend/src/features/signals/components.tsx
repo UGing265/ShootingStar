@@ -23,8 +23,9 @@ function signalClass(value: string): string {
 
 function signalDecision(value: string): string {
   switch (value) {
-    case 'BUY': return 'Mua';
-    case 'LONG': return 'Mua';
+    case 'BUY': return 'Đề xuất mua';
+    case 'LONG': return 'Đề xuất mua';
+    case 'TRADE_LONG': return 'Đề xuất mua';
     case 'HOLD': return 'Giữ';
     case 'NO_TRADE': return 'Không giao dịch';
     case 'ABSTAIN': return 'Đứng ngoài';
@@ -44,7 +45,7 @@ export function SignalListView({ signals }: { signals: SignalSummary[] }) {
           <tr>
             <th>Thời gian dự đoán (UTC)</th>
             <th>Phân loại</th>
-            <th>P(UP)</th>
+            <th>Xác suất tăng</th>
             <th>Quyết định</th>
             <th>Trạng thái</th>
             <th>Lợi suất thực tế</th>
@@ -98,7 +99,7 @@ export function SignalListView({ signals }: { signals: SignalSummary[] }) {
               </td>
               <td>
                 <Link href={`/signals/${s.id}`} className="nav-link" style={{ fontWeight: 500 }}>
-                  Xem kiểm toán →
+                  Xem chi tiết →
                 </Link>
               </td>
             </tr>
@@ -117,7 +118,7 @@ export function SignalDetailView({ detail }: { detail: SignalDetailResponse }) {
       <Card>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
           <div>
-            <h2 style={{ fontSize: 24, fontWeight: 600 }}>Kiểm toán và nguồn gốc dự đoán</h2>
+            <h2 style={{ fontSize: 24, fontWeight: 600 }}>Chi tiết dự đoán</h2>
             <p style={{ fontSize: 13, color: 'var(--ink-muted)', marginTop: 4 }}>
               ID dự đoán: <code className="code-snippet">{prediction.id}</code> | Thời gian:{' '}
               {new Date(prediction.prediction_time_ms).toISOString().replace('T', ' ').slice(0, 19)} UTC
@@ -138,7 +139,7 @@ export function SignalDetailView({ detail }: { detail: SignalDetailResponse }) {
 
         <div className="grid-cols-4" style={{ marginBottom: 16 }}>
           <StatBox label="Phân loại dự đoán" value={signalClass(prediction.predicted_class)} />
-          <StatBox label="P(UP)" value={`${(prediction.probability_up * 100).toFixed(1)}%`} />
+          <StatBox label="Xác suất tăng" value={`${(prediction.probability_up * 100).toFixed(1)}%`} />
           <StatBox label="Quyết định" value={signalDecision(prediction.decision)} subtext={prediction.decision_reason} />
           <StatBox
             label="Lợi suất thực tế"
