@@ -97,6 +97,7 @@ def test_evaluation_report_generator_and_cost_gating():
     model = CalibratedLogisticRegressionModel()
     model.fit_and_calibrate(X_test, y_test, X_test, y_test)
 
+    y_train = np.ones(50, dtype=int)  # 100% UP in train
     report = EvaluationReportGenerator.generate_report(
         model=model,
         X_test=X_test,
@@ -109,8 +110,8 @@ def test_evaluation_report_generator_and_cost_gating():
         horizon_minutes=30,
         test_start_time_ms=1700000000000,
         test_end_time_ms=1700015000000,
+        y_train=y_train,
     )
-
     assert report.directional_metrics.sample_count == 50
     assert 0.0 <= report.directional_metrics.accuracy <= 1.0
     assert 0.0 <= report.directional_metrics.brier_score <= 1.0
@@ -135,19 +136,113 @@ def test_experiment_runner_deterministic_reproducibility(tmp_path: Path):
     snap_storage = SnapshotStorage(snapshots_dir=snap_dir)
     snap_path, snap_hash = snap_storage.save_snapshot(candles, "BINANCE", "BTCUSDT", "5m")
 
-    runner = ExperimentRunner(
-        snapshot_storage=snap_storage,
-        models_dir=models_dir,
-        reports_dir=reports_dir,
+    from shootingstar.adapters.db.session import get_db_session
+    from shootingstar.adapters.db.models import SnapshotModel, ExperimentModel
+    from shootingstar.adapters.db.repository import SnapshotRepository
+    import uuid
+    exp_id_1 = f"exp_rep_{uuid.uuid4().hex[:10]}"
+    exp_id_2 = f"exp_rep_{uuid.uuid4().hex[:10]}"
+    created_snapshot = False
+
+    with get_db_session() as s:
+        s_repo = SnapshotRepository(s)
+        existing_snap = s.get(SnapshotModel, snap_hash)
+        if not existing_snap:
+            snap_rec = SnapshotModel(
+                id=snap_hash,
+                venue="BINANCE",
+                symbol="BTCUSDT",
+                timeframe="5m",
+                start_time_ms=candles[0].open_time_ms,
+                end_time_ms=candles[-1].close_time_ms,
+                candle_count=len(candles),
+                file_path=str(snap_path),
+                sha256=snap_hash,
+            )
+            s_repo.save(snap_rec)
+            s.commit()
+            created_snapshot = True
+    try:
+        runner = ExperimentRunner(
+            snapshot_storage=snap_storage,
+            models_dir=models_dir,
+            reports_dir=reports_dir,
+        )
+
+        # First run
+        rep1, art_path1, art_hash1 = runner.run_experiment(snap_path, exp_id_1)
+
+        # Second run with identical config
+        rep2, art_path2, art_hash2 = runner.run_experiment(snap_path, exp_id_2)
+        # Gate verification: Identical metric reproduction
+        assert rep1.directional_metrics.accuracy == rep2.directional_metrics.accuracy
+        assert rep1.directional_metrics.brier_score == rep2.directional_metrics.brier_score
+        assert rep1.directional_metrics.up_count == rep2.directional_metrics.up_count
+    finally:
+        with get_db_session() as s:
+            from shootingstar.adapters.db.models import (
+                ExperimentSplitModel,
+                MetricReportModel,
+                ModelArtifactModel,
+            )
+            from sqlalchemy import delete
+            s.execute(delete(ExperimentSplitModel).where(ExperimentSplitModel.experiment_id.in_([exp_id_1, exp_id_2])))
+            s.execute(delete(MetricReportModel).where(MetricReportModel.experiment_id.in_([exp_id_1, exp_id_2])))
+            s.execute(delete(ModelArtifactModel).where(ModelArtifactModel.experiment_id.in_([exp_id_1, exp_id_2])))
+            s.execute(delete(ExperimentModel).where(ExperimentModel.id.in_([exp_id_1, exp_id_2])))
+            if created_snapshot:
+                s.execute(delete(SnapshotModel).where(SnapshotModel.id == snap_hash))
+            s.commit()
+
+def test_baseline_train_only_fitting_no_test_leakage():
+    """Proves majority class baseline depends strictly on y_train, not held-out y_test."""
+    X_test = np.random.randn(20, 4)
+    # Test set is 95% DOWN (19 DOWN, 1 UP to satisfy log_loss multi-class requirements)
+    y_test = np.array([0] * 19 + [1], dtype=int)
+    # Train set is 100% UP
+    y_train_up = np.ones(40, dtype=int)
+
+    model = CalibratedLogisticRegressionModel()
+    X_dummy = np.random.randn(20, 4)
+    y_dummy = np.array([0, 1] * 10)
+    model.fit_and_calibrate(X_dummy, y_dummy, X_dummy, y_dummy)
+
+    report = EvaluationReportGenerator.generate_report(
+        model=model,
+        X_test=X_test,
+        y_test=y_test,
+        returns_test=np.zeros(20),
+        experiment_id="exp_leak_check",
+        snapshot_sha256="hash123",
+        symbol="BTCUSDT",
+        timeframe="5m",
+        horizon_minutes=30,
+        test_start_time_ms=1000,
+        test_end_time_ms=2000,
+        y_train=y_train_up,
     )
 
-    # First run
-    rep1, art_path1, art_hash1 = runner.run_experiment(snap_path, "exp_rep_1")
+    maj_baseline = next(b for b in report.baseline_comparisons if b["name"] == "Majority_Class")
+    # If baseline fit y_test (95% DOWN), accuracy would be 0.95.
+    # Since it strictly fit y_train (100% UP), it predicts all UP, matching only 1/20 (accuracy 0.05)!
+    assert maj_baseline["accuracy"] == 0.05
 
-    # Second run with identical config
-    rep2, art_path2, art_hash2 = runner.run_experiment(snap_path, "exp_rep_2")
 
-    # Gate verification: Identical metric reproduction
-    assert rep1.directional_metrics.accuracy == rep2.directional_metrics.accuracy
-    assert rep1.directional_metrics.brier_score == rep2.directional_metrics.brier_score
-    assert rep1.directional_metrics.up_count == rep2.directional_metrics.up_count
+def test_walk_forward_splitter_timeframes_anti_leakage():
+    """Verifies purge gaps are dynamically derived to prevent lookahead leakage."""
+    from shootingstar.application.splits import WalkForwardSplitter
+
+    # 5m candles -> 30m horizon is 6 samples
+    splitter_5m = WalkForwardSplitter.for_timeframe("5m", horizon_minutes=30)
+    assert splitter_5m.purge_gap_samples == 6
+
+    # 1m candles -> 30m horizon is 30 samples
+    splitter_1m = WalkForwardSplitter.for_timeframe("1m", horizon_minutes=30)
+    assert splitter_1m.purge_gap_samples == 30
+
+    # Verify split boundaries have zero overlap and exact gap
+    timestamps = list(range(0, 300 * 60000, 60000))  # 300 1m timestamps
+    splits = splitter_1m.split(timestamps)
+    assert splits.train.end_idx + 30 < splits.calibration.start_idx
+    assert splits.calibration.end_idx + 30 < splits.validation.start_idx
+    assert splits.validation.end_idx + 30 < splits.test.start_idx

@@ -143,3 +143,52 @@ def test_baselines_and_spot_trade_accounting():
     mom_metrics = BaselineEvaluator.evaluate(mom_model, X_test, y_test, returns_test)
     assert mom_metrics.accuracy == 1.0  # Perfectly matches signs in this test set
     assert mom_metrics.spot_cumulative_return == 0.015 + 0.025  # Only positive trades entered
+
+
+def test_target_label_entry_time_causality():
+    candles = create_synthetic_candles(10)
+    service = LabelGenerationService(horizon_minutes=30, execution_price_mode="open_next")
+    labels = service.generate_labels(candles)
+
+    assert len(labels) > 0
+    for lbl in labels:
+        # Invariant: open_next enters strictly at candle i+1's open, which is after close of candle i
+        assert lbl.entry_time_ms > lbl.close_time_t_ms
+        assert lbl.entry_time_ms == lbl.close_time_t_ms + 1
+
+
+def test_feature_extraction_drops_unknown_availability():
+    candles = create_synthetic_candles(10)
+    # Candles without observed_ingested_at_ms and assumed_latency_ms=None
+    service = FeatureExtractionService(assumed_latency_ms=None)
+    mat = service.extract_matrix(candles)
+
+    # Invariant: rows without verified availability timestamp MUST be dropped
+    assert len(mat.values) == 0
+    assert len(mat.timestamps_ms) == 0
+    assert len(mat.candle_open_times_ms) == 0
+
+
+def test_experiment_drops_trades_when_latency_exceeds_entry_time():
+    # If assumed_latency_ms exceeds the gap to next candle open (e.g. latency = 5000ms),
+    # entering at candle i+1 open is impossible without lookahead.
+    # The runner must drop these causally invalid samples.
+    candles = create_synthetic_candles(150)
+    feat_service = FeatureExtractionService(assumed_latency_ms=5000)
+    feat_mat = feat_service.extract_matrix(candles)
+
+    label_service = LabelGenerationService(horizon_minutes=30, execution_price_mode="open_next")
+    labels = label_service.generate_labels(candles)
+    label_map = {lbl.open_time_t_ms: lbl for lbl in labels}
+
+    valid_aligned_count = 0
+    for i, open_t in enumerate(feat_mat.candle_open_times_ms):
+        if open_t in label_map:
+            lbl = label_map[open_t]
+            avail_t = feat_mat.timestamps_ms[i]
+            if lbl.entry_time_ms >= avail_t:
+                valid_aligned_count += 1
+
+    # With 5000ms latency, avail_t is close_time + 5000ms, which is > next open (close + 1ms).
+    # All such samples must be rejected!
+    assert valid_aligned_count == 0

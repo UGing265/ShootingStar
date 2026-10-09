@@ -69,7 +69,32 @@ def test_snapshot_storage_roundtrip_and_checksum(tmp_path: Path):
     assert c.low == candle.low
     assert c.close == candle.close
     assert c.observed_ingested_at_ms == 1700000061000
+    assert c.is_backfill is False
 
+    # Round-trip backfilled candle
+    backfill_candle = Candle(
+        venue="BINANCE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        open_time_ms=1700000060000,
+        close_time_ms=1700000119999,
+        open=50050.0,
+        high=50100.0,
+        low=50000.0,
+        close=50080.0,
+        volume=3.0,
+        quote_volume=150000.0,
+        trades_count=30,
+        taker_buy_base_volume=1.5,
+        taker_buy_quote_volume=75000.0,
+        observed_ingested_at_ms=None,
+        is_backfill=True,
+    )
+    bf_path, _ = storage.save_snapshot([backfill_candle], "BINANCE", "BTCUSDT", "1m")
+    bf_loaded = storage.load_snapshot(bf_path)
+    assert len(bf_loaded) == 1
+    assert bf_loaded[0].is_backfill is True
+    assert bf_loaded[0].observed_ingested_at_ms is None
 
 class MockBinanceClient:
     def __init__(self, rows):
@@ -91,10 +116,11 @@ def test_pilot_ingestion_service_with_mock(tmp_path: Path):
     raw_storage = RawArchiveStorage(raw_dir=raw_dir)
     snap_storage = SnapshotStorage(snapshots_dir=snap_dir)
 
+    base_time = 1700000000000
     mock_rows = [
-        [1700000000000, "100.0", "101.0", "99.0", "100.5", "10.0", 1700000059999, "1005.0", 10, "5.0", "502.5", "0"],
-        [1700000060000, "100.5", "102.0", "100.0", "101.5", "12.0", 1700000119999, "1218.0", 12, "6.0", "609.0", "0"],
-        [1700000120000, "101.5", "103.0", "101.0", "102.5", "8.0", 1700000179999, "820.0", 8, "4.0", "410.0", "0"],
+        [base_time, "100.0", "101.0", "99.0", "100.5", "10.0", base_time + 59999, "1005.0", 10, "5.0", "502.5", "0"],
+        [base_time + 60000, "100.5", "102.0", "100.0", "101.5", "12.0", base_time + 119999, "1218.0", 12, "6.0", "609.0", "0"],
+        [base_time + 120000, "101.5", "103.0", "101.0", "102.5", "8.0", base_time + 179999, "820.0", 8, "4.0", "410.0", "0"],
     ]
     mock_client = MockBinanceClient(rows=mock_rows)
 
@@ -107,8 +133,8 @@ def test_pilot_ingestion_service_with_mock(tmp_path: Path):
     result = service.run_pilot(
         symbol="BTCUSDT",
         timeframe_str="1m",
-        start_time_ms=1700000000000,
-        end_time_ms=1700000179999,
+        start_time_ms=base_time,
+        end_time_ms=base_time + 179999,
     )
 
     assert result.report.valid_candles_count == 3
@@ -157,3 +183,39 @@ def test_exact_snapshot_hash_reproducibility_from_raw_archive(tmp_path: Path):
     # 3. Invariant: Checksum and file content must match identically
     assert rebuilt_sha256 == original_result.snapshot_sha256
     assert rebuilt_path.read_bytes() == original_result.snapshot_path.read_bytes()
+
+def test_pilot_ingestion_requested_window_missing_edge_candles_detection(tmp_path: Path):
+    """Verifies that missing leading and trailing candles in requested window are detected."""
+    raw_dir = tmp_path / "raw"
+    snap_dir = tmp_path / "snapshots"
+    raw_storage = RawArchiveStorage(raw_dir=raw_dir)
+    snap_storage = SnapshotStorage(snapshots_dir=snap_dir)
+
+    # Window requests 5 candles (0, 60k, 120k, 180k, 240k), but client only returns middle 3 (60k, 120k, 180k)
+    base_time = 1700000000000
+    mock_rows = [
+        [base_time + 60000, "100.5", "102.0", "100.0", "101.5", "12.0", base_time + 119999, "1218.0", 12, "6.0", "609.0", "0"],
+        [base_time + 120000, "101.5", "103.0", "101.0", "102.5", "8.0", base_time + 179999, "820.0", 8, "4.0", "410.0", "0"],
+        [base_time + 180000, "102.5", "104.0", "102.0", "103.0", "15.0", base_time + 239999, "1545.0", 15, "7.0", "721.0", "0"],
+    ]
+    mock_client = MockBinanceClient(rows=mock_rows)
+
+    service = PilotIngestionService(
+        client=mock_client,
+        raw_storage=raw_storage,
+        snapshot_storage=snap_storage,
+    )
+
+    result = service.run_pilot(
+        symbol="BTCUSDT",
+        timeframe_str="1m",
+        start_time_ms=base_time,
+        end_time_ms=base_time + 299999,
+    )
+
+    # Expected 5 candles, returned 3 -> 2 missing (1 leading at 0, 1 trailing at 240k)
+    assert result.report.total_expected_intervals == 5
+    assert result.report.valid_candles_count == 3
+    assert result.report.missing_intervals_count == 2
+    assert result.report.is_pristine is False
+    assert result.report.coverage_ratio == 0.60

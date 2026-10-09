@@ -68,6 +68,53 @@ def test_observed_live_ingestion_availability():
     assert candle.is_available_at(1700000060500) is True
 
 
+def test_delayed_live_candle_retains_receipt_time():
+    # Live candle delayed by 2 minutes retains actual receipt time
+    candle = Candle(
+        venue="BINANCE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        open_time_ms=1700000000000,
+        close_time_ms=1700000059999,
+        open=50000.0,
+        high=50100.0,
+        low=49950.0,
+        close=50050.0,
+        volume=1.0,
+        quote_volume=50000.0,
+        trades_count=10,
+        taker_buy_base_volume=0.5,
+        taker_buy_quote_volume=25000.0,
+        observed_ingested_at_ms=1700000180000,  # 2 minutes delayed
+        is_backfill=False,
+    )
+    assert candle.effective_available_at_ms() == 1700000180000
+    assert candle.is_available_at(1700000179999) is False
+    assert candle.is_available_at(1700000180000) is True
+
+def test_backfilled_candle_requires_explicit_latency():
+    candle = Candle(
+        venue="BINANCE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        open_time_ms=1700000000000,
+        close_time_ms=1700000059999,
+        open=50000.0,
+        high=50100.0,
+        low=49950.0,
+        close=50050.0,
+        volume=1.0,
+        quote_volume=50000.0,
+        trades_count=10,
+        taker_buy_base_volume=0.5,
+        taker_buy_quote_volume=25000.0,
+        observed_ingested_at_ms=None,
+        is_backfill=True,
+    )
+    assert candle.effective_available_at_ms(assumed_latency_ms=None) is None
+    assert candle.effective_available_at_ms(assumed_latency_ms=0) is None
+    assert candle.effective_available_at_ms(assumed_latency_ms=1) == 1700000060000
+
 def test_invalid_observed_ingestion_before_close_time():
     with pytest.raises(InvalidCandleError, match="cannot be before close_time_ms"):
         Candle(
