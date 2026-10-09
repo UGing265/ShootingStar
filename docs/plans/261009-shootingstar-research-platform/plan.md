@@ -10,7 +10,7 @@ created: 2026-10-09
 ---
 # ShootingStar Research Platform Implementation Plan
 
-> Planning only. No code, trained model, database, provider integration, or verified result exists yet. Phase gates below must not be described as shipped features.
+> Kế hoạch gốc viết trước khi triển khai. **Agent audit tĩnh** xác nhận Phase 1–7 có code nhưng chưa đủ bằng chứng đạt gate, Phase 8 thiếu Next.js, Phase 9 thiếu landing; xem bảng bên dưới và mục A0 trong [`../261009-shootingstar-nextjs/plan.md`](../261009-shootingstar-nextjs/plan.md) để biết từng khoảng trống. Audit chưa chạy test/DB/browser; không coi bảng này là bằng chứng tính năng hoạt động.
 
 **Goal:** Research and review BTCUSDT 30-minute `UP/DOWN/NO_TRADE` predictions from data available at prediction time; publish reproducible evidence, not automated trading or profit promises.
 
@@ -27,7 +27,7 @@ created: 2026-10-09
 - Features và pattern chỉ dùng nến đã đóng **và thực sự khả dụng tại prediction time `t`**; kiểm tra `available_at <= t`, không chỉ `close_time <= t`. Binance historical klines không chứng minh được thời điểm publication trong quá khứ: với backtest phải công khai giả định độ trễ bảo thủ; giá entry không sớm hơn thời điểm khả dụng giả định. Future prices chỉ dùng để tạo label/outcome. Train → calibration → held-out test theo thời gian, gap/purge theo horizon.
 - Separate predicted class, calibrated probabilities and action policy. `DOWN 60%` is not automatically actionable; `NO_TRADE` may be selected even if `DOWN` is argmax. On Spot, DOWN is not short P&L. Override/review is separate from model prediction and evaluation.
 - Rule-based, interpretable candle patterns live in separate Pattern Lab, not silently fed into classifier. Explicit definitions/versions and normalized candle measurements; overlapping windows must not masquerade as independent confirmations.
-- Landing page narrates why ShootingStar exists, what it is, and accuracy-before-speed. 90% is unverified ambition, never a result or guarantee. A restrained pinned scroll-driven SVG/illustrative chart story; real research report or explicit 'not yet verified' state, no invented results. Work pages use only basic motion; reduced-motion and mobile non-pinned equivalents.
+- Landing `/` kể lý do ShootingStar ra đời, hiện trạng và triết lý accuracy-before-speed; tham vọng 90% chưa được chứng minh, không phải kết quả hay bảo đảm. Thiết kế cinematic dùng clip sao băng theo cuộn, desktop sidebar dành riêng dashboard `/dashboard`; xem [`../261009-shootingstar-cinematic-landing-sidebar/plan.md`](../261009-shootingstar-cinematic-landing-sidebar/plan.md) để thực hiện Phase 9. Chỉ phát hành asset khi quyền sử dụng được xác minh; các trang làm việc dùng motion tối thiểu, mobile/reduced-motion có nội dung tĩnh.
 - Primary visual system: `docs/DESIGN.md` (white/parchment/near-black, blue `#0066cc` as interactive accent, low chrome, strong type). Color must not imply UP/profit. Avoid retail components and huge tiles inside work pages.
 - Deployment/Docker Compose, real trading, news integration where provenance is unverified, LLM/Gemini, and automatic retraining deferred. Paper trading is later than validated offline research. Do not claim predictive edge until measured.
 
@@ -48,19 +48,19 @@ created: 2026-10-09
 - Experiment: frozen configuration hash, snapshot checksum, feature-set/model and rule versions; ordered split windows, embargo length, artifact checksum, calibration window, metrics/report references. Any change creates new version/experiment.
 - Pattern: immutable rule/version, detection timestamp, fixed lookback, normalized descriptors, outcome once mature, rejection reason if invalid. Pattern card shows count, **effective temporal coverage**, outcomes and uncertainty/time-period breakdown; not 'verified 100000 times' from overlapping windows.
 
-## Phases — kế hoạch, chưa triển khai
+## Phases — kế hoạch và trạng thái audit tĩnh (chưa nghiệm thu)
 
 | Phase | Kết quả bàn giao | Phụ thuộc | Trạng thái |
 |---|---|---|---|
-| 1. Nền tảng local | Quy tắc thời gian, CLI, hướng dẫn API | Không | Chưa bắt đầu |
-| 2. Dữ liệu | Pilot 30 ngày, kiểm tra nến, raw + snapshot | 1 | Chưa bắt đầu |
-| 3. Lưu trữ | PostgreSQL, migration, audit/provenance | 1–2 | Chưa bắt đầu |
-| 4. Nghiên cứu cơ bản | Features, baseline; nhãn theo chi phí chờ phương pháp slippage | 2–3 | Chưa bắt đầu |
-| 5. Đánh giá model | Walk-forward, calibration, report trung thực | 4 và quy tắc label đã chốt | Chưa bắt đầu |
-| 6. Mẫu hình | Rule-based Pattern Lab riêng biệt | 2–4, chốt quy tắc mẫu | Chưa bắt đầu |
-| 7. Signals | Dự đoán, chờ đủ 30 phút, đối chiếu/review | 5 | Chưa bắt đầu |
-| 8. Web làm việc | FastAPI read APIs, Next.js 5 page | 2–7 theo page | Chưa bắt đầu |
-| 9. Landing | Scrollytelling lý do ra đời, report thật/empty state | Thiết kế đã duyệt; report thật cần 5 | Chưa bắt đầu |
+| 1. Nền tảng local | Quy tắc thời gian, CLI, hướng dẫn API | Không | Có code; chưa đối soát gate |
+| 2. Dữ liệu | Pilot 30 ngày, kiểm tra nến, raw + snapshot | 1 | Có code; quality window/reject chưa đạt gate |
+| 3. Lưu trữ | PostgreSQL, migration, audit/provenance | 1–2 | Có schema/repository; lưu đủ provenance chưa xác minh |
+| 4. Nghiên cứu cơ bản | Features, baseline; nhãn theo chi phí chờ phương pháp slippage | 2–3 | Directional-only; availability/cost gate chưa đạt |
+| 5. Đánh giá model | Walk-forward, calibration, report trung thực | 4 và quy tắc label đã chốt | Có code; leakage/purge/provenance chưa đạt gate |
+| 6. Mẫu hình | Rule-based Pattern Lab riêng biệt | 2–4, chốt quy tắc mẫu | Có detector; version/persist hits chưa đạt gate |
+| 7. Signals | Dự đoán, chờ đủ 30 phút, đối chiếu/review | 5 | Có lifecycle; thiếu model-driven producer và maturity gate |
+| 8. Web làm việc | FastAPI read APIs, Next.js 5 page | 2–7 theo page | Chưa đạt gate; xem plan Next.js liên kết ở trên |
+| 9. Landing | Scrollytelling lý do ra đời, report thật/empty state | Thiết kế đã duyệt; report thật cần 5 | Chưa đạt gate; xem plan Next.js liên kết ở trên |
 | 10. Sau nghiên cứu | Paper trading, news, deployment chỉ khi đủ điều kiện riêng | 5–9 và quyết định sau | Để sau |
 
 ### Phase 1. Local foundation and data contracts
