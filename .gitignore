@@ -41,6 +41,7 @@ htmlcov/
 node_modules/
 .next/
 out/
+*.tsbuildinfo
 
 # Environment / Secrets
 .env
