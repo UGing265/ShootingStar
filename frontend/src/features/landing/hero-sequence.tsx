@@ -30,8 +30,8 @@ export function HeroSequence() {
 
     const cw = canvas.width;
     const ch = canvas.height;
-    const iw = img.naturalWidth || 960;
-    const ih = img.naturalHeight || 540;
+    const iw = img.naturalWidth || 1920;
+    const ih = img.naturalHeight || 1080;
 
     const scale = Math.max(cw / iw, ch / ih);
     const nw = iw * scale;
@@ -39,6 +39,8 @@ export function HeroSequence() {
     const nx = (cw - nw) / 2;
     const ny = (ch - nh) / 2;
 
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.clearRect(0, 0, cw, ch);
     ctx.drawImage(img, nx, ny, nw, nh);
   }, []);
