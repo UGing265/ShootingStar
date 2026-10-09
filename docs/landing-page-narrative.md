@@ -13,14 +13,14 @@ Commercial trading vendors routinely claim 80–90% win rates on retail indicato
 
 ShootingStar was constructed from the ground up to establish an **honest, reproducible research baseline**:
 
-| Metric | Logistic Regression (Held-Out Test) | Baseline 1 (Majority Class) | Baseline 2 (Momentum) | Coin Flip Benchmark |
+| Metric | Logistic Regression (Out-Of-Sample) | Baseline 1 (Majority Class) | Baseline 2 (Momentum) | Coin Flip Benchmark |
 | :--- | :--- | :--- | :--- | :--- |
-| **Directional Accuracy** | **51.05%** | **51.46%** | **49.42%** | **50.00%** |
-| **Brier Score** | **0.2507** | 0.2502 | 0.5058 | 0.2500 |
-| **Sample Size ($N$)** | 1,710 | 1,710 | 1,710 | - |
+| **Directional Accuracy** | **Chưa kiểm chứng** | **Chưa kiểm chứng** | **Chưa kiểm chứng** | 50.00% |
+| **Brier Score** | **GATED** | GATED | GATED | 0.2500 |
+| **Sample Size ($N$)** | Walk-Forward Out-of-Sample | Walk-Forward Out-of-Sample | Walk-Forward Out-of-Sample | - |
 | **Cost-Adjusted Expectancy** | **GATED** | **GATED** | **GATED** | - |
 
-**Empirical Conclusion:** On pure 5-minute causal features over a 30-day window (8,640 candles), linear classification achieves **51.05%** out-of-sample directional accuracy, indistinguishable from random noise and slightly trailing the majority baseline. Standalone candlestick patterns show win rates between **46.0% and 49.7%**.
+> **Trạng thái:** Chưa có kết quả kiểm chứng out-of-sample chính thức được phê duyệt cho production. Tất cả chỉ số P&L ròng và kỳ vọng giao dịch đều bị khóa (**GATED**) cho đến khi mô hình trượt giá sổ lệnh được thẩm định.
 
 ---
 
@@ -38,13 +38,7 @@ ShootingStar categorically rejects common retail marketing fallacies:
 
 ### Fallacy 3: "Candlestick Patterns Guarantee Reversals"
 - **Cause:** Visual survivorship bias (remembering the hammer that preceded a rally, ignoring the 50 that failed).
-- **ShootingStar Countermeasure:** Declarative, mathematical Rule-Based Pattern Lab (`src/shootingstar/application/patterns.py`). In a 30-day pilot of 8,640 candles:
-  - **Shooting Star ($N=272$):** 49.3% win rate, mean 30m return +0.025%.
-  - **Hammer ($N=277$):** 46.6% win rate, mean 30m return +0.003%.
-  - **Bearish Engulfing ($N=829$):** 49.7% win rate, mean 30m return -0.000%.
-  - **Bullish Engulfing ($N=796$):** 46.0% win rate, mean 30m return -0.003%.
-  *None demonstrate an exploitable standalone directional edge.*
-
+- **ShootingStar Countermeasure:** Declarative, mathematical Rule-Based Pattern Lab (`backend/shootingstar/application/patterns.py`). Các mẫu hình được định nghĩa bằng quy tắc hình học rõ ràng và kiểm định out-of-sample độc lập; không một mẫu hình đơn lẻ nào được tự ý gán nhãn win rate hay coi là edge khi chưa có kiểm chứng độc lập.
 ---
 
 ## 3. Methodological Rigor & Data Provenance
