@@ -19,6 +19,8 @@ created: 2026-10-09
 Người dùng chọn BTCUSDT Spot, nến `1m` hoặc `5m`, khoảng lịch sử tùy chỉnh; xem Preview trước khi nạp chính thức, lưu nhiều snapshot có thể chọn lại. Ở khu mô phỏng, chọn snapshot, mốc ngày/giờ, giá BTC và horizon từ 30 phút tới tối đa một ngày; biểu đồ đặt **dấu chấm tại thời điểm/giá chọn** và **đường ngang giá đã nhập**. Job AI dự báo UP/DOWN, xác suất và bằng chứng/giới hạn giải thích; người dùng chọn UP/DOWN sau đó. Hai lựa chọn được lưu và chấm riêng, **không độc lập về thông tin**. Chưa có số liệu chứng minh độ chính xác. Ý nghĩa giá nhập và mốc so sánh phải chốt trước khi code.
 
 **Không phải** streaming giá hiện tại, tư vấn mua bán, giả lập khớp lệnh, ví tiền thật/ảo, giao dịch thật, P&L, hay chứng nhận model có edge. Khoản tiền ảo đã được nhắc khi brainstorm nhưng **chưa được chốt** là chức năng bước này; tách riêng khỏi replay dự đoán. Không có nút đẹp nhưng không chạy pipeline thật.
+
+**Phạm vi mới được chốt riêng:** [Điểm vào và TP/SL tối đa 30 phút](../261010-fast-entry-30m-strategy/plan.md) sở hữu public watcher và paper/manual strategy observations. Các exclusions của replay hướng giá vẫn đúng cho mode cũ; plan mới không biến giá nhập/vote/reveal thành fill, không thêm order API thật. Shadow labels tách khỏi dữ liệu mà decision được thấy.
 ### Luồng chính tách tab
 
 1. **Lịch sử / Preview:** custom khung ngày/giờ → Preview nến/khoảng/phạm vi thiếu và nguồn → xác nhận **Nạp chính thức** mới lưu snapshot bất biến; chọn lại được nhiều bản. Preview không âm thầm ghi bản nạp chính thức vào DB.

@@ -4,7 +4,7 @@ description: "Tách backend tự train/API, phân tích 6 giờ nến trước t
 status: proposed
 priority: P1
 tags: [research, replay, external-api, model-evaluation]
-blockedBy: [261010-replay-result-ux, 261010-agent-evidence-analysis]
+blockedBy: [261010-replay-result-ux, 261010-agent-evidence-analysis, 261010-readable-evidence-report]
 blocks: []
 created: 2026-10-10
 ---
@@ -15,6 +15,10 @@ created: 2026-10-10
 **Cập nhật UX 2026-10-10 — đang chờ plan [Replay dễ đọc và kết quả tự mở](../261010-replay-result-ux/plan.md):** Gate UX Replay Phase 03 phải có lời nhận định tiếng Việt dễ hiểu, preview chart ở bước 2/4 và lưu dự đoán bước 3 xong tự mở bước 4/reveal, không thêm lần bấm “Xem kết quả”. Chỉ dẫn cũ về nút riêng bên dưới không còn là yêu cầu hiện hành. Quan hệ blocked chỉ áp nghiệm thu UX, không thay gate key thật/quota/bài học/đánh giá prospective; không đánh dấu tính năng đã triển khai từ plan này.
 
 **Yêu cầu phân tích mới — blocked gate report:** [plan điều phối agent có bằng chứng](../261010-agent-evidence-analysis/plan.md) thay thiết kế one-shot/rationale ngắn/research chỉ ngoài luồng. Mỗi job mới phải có feed, phân tích sơ bộ, Google/sách nguồn đọc thật, diagnostic criteria và bài tổng hợp đầy đủ. Phần lesson/admin APPROVED vẫn giữ riêng; nguồn mới của job không tự thành bài học APPROVED. Các pass/build pilot cũ bên dưới không nghiệm thu pipeline mới; không chặn ingestion/tự train/quản trị đã có.
+
+**Bổ sung readability — gate báo cáo đang blocked:** [Báo cáo dễ đọc](../261010-readable-evidence-report/plan.md) xử lý epoch, tên biến nội bộ, ratio/đơn vị và Markdown thô theo ảnh người dùng. Giữ dữ liệu và báo cáo đã lưu bất biến; không gọi lại model để dịch. Chỉ chặn nghiệm thu trình bày report, không chặn prospective/ingestion/library.
+
+**Chiến thuật điểm vào mới:** [Plan TP/SL 30 phút](../261010-fast-entry-30m-strategy/plan.md) bổ sung long-only candidate/watcher/paper-manual observations và xác suất first-barrier riêng. Gemini vẫn chỉ narrative/research; p_up/down job cũ không bị biến thành p_tp/sl. Không thêm dependency toàn plan: gate API/lesson/prospective cũ độc lập, integration phải tránh sửa service/UI đồng thời.
 
 ## Mục tiêu
 

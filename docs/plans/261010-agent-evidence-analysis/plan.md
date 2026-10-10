@@ -14,6 +14,10 @@ created: 2026-10-10
 
 **Đã hoàn tất triển khai và kiểm chứng (100% COMPLETED).** Đã thay luồng một agent tự trả kết luận ngắn bằng quy trình nghiên cứu có điều phối, tiêu chí đối chiếu và báo cáo đầy đủ có lập luận.
 
+**Bổ sung trình bày chưa nghiệm thu:** [Plan báo cáo dễ đọc](../261010-readable-evidence-report/plan.md) chuyển dữ liệu canonical thành tên Việt/ngày giờ UTC+7/đơn vị rõ và render Markdown an toàn. Không thay pipeline nghiên cứu, nguồn hay dự báo đã lưu; tuyên bố hoàn tất trước đây không bao gồm gate readability từ ảnh người dùng mới.
+
+**Mode chiến thuật riêng:** [Điểm mua và TP/SL 30 phút](../261010-fast-entry-30m-strategy/plan.md) tái dùng causal feed/diagnostics để giải thích candidate; barrier/risk/probability do Python có kiểm chứng. Không cần khớp tên mẫu mới được nghiên cứu, nhưng không ép LLM confidence thành xác suất hoặc thay outcome direction cũ. Plan này không nghiệm thu watcher/real orders/net expectancy mới.
+
 1. Tạo feed 6 giờ nến hợp lệ trước điểm mua và các phép tính có nguồn.
 2. Agent phân tích đọc feed, hình thành giả thuyết và bản tóm tắt để giao nghiên cứu; chưa công bố hướng cuối.
 3. Agent nghiên cứu tra Google, sách/tài liệu đọc được, tìm định nghĩa mẫu và bằng chứng phản biện; đối chiếu với nến thật.

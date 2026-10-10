@@ -14,6 +14,8 @@ created: 2026-10-09
 
 **Goal:** Research and review BTCUSDT 30-minute `UP/DOWN/NO_TRADE` predictions from data available at prediction time; publish reproducible evidence, not automated trading or profit promises.
 
+**New bounded strategy scope:** [Entry/TP/SL within 30 minutes](../261010-fast-entry-30m-strategy/plan.md) owns long-only public-data monitoring, immutable paper/manual observations and barrier-outcome probability research. Existing binary predictions retain semantics. Only the strategy-specific cost/paper gates are extended; no live exchange orders, general news/agent scope or promise of profitable execution is unlocked.
+
 **Architecture:** Python 3.12 modular monolith: domain rules → application use cases/ports → provider, persistence, file and ML adapters → local CLI jobs and FastAPI read API. Next.js App Router/TypeScript consumes backend read contracts. PostgreSQL holds canonical records; raw responses and immutable validated Parquet experiment snapshots are separately checksummed files. Initial operation is local/manual. No Docker Compose until deployment discussion.
 
 **Reference:** `docs/reseaching/docs/shootingstar-business-requirements.md`, `docs/reseaching/docs/shootingstar-research-report.md`, `docs/reseaching/docs/superpowers/specs/2026-08-19-shootingstar-technology-design.md`, `docs/DESIGN.md`. Correct references to legacy paths when writing project README. `docs/DESIGN.md` is ShootingStar's primary visual system; adapt Apple-like sparse chrome to data-dense research tables, not retail imagery/CTAs.

@@ -16,6 +16,10 @@ created: 2026-10-10
 
 **Cập nhật yêu cầu nghiên cứu:** phần nhận định/report mới đang **blocked** bởi [pipeline agent có bằng chứng](../261010-agent-evidence-analysis/plan.md). Người dùng không muốn một câu kết luận tự phát hoặc bài tối đa ba câu: cần main điều phối feed → phân tích sơ bộ → tra sách/Google → đối chiếu criteria → agent tổng hợp viết bài đầy đủ. Chart/mask/auto-result giữ nguyên; scope nghiên cứu mới thay phần rút gọn trước đó.
 
+**Bổ sung sau nghiệm thu UX trước:** ảnh người dùng vẫn cho thấy bài báo cáo chứa epoch/tên feature/Markdown thô. [Plan báo cáo dễ đọc](../261010-readable-evidence-report/plan.md) sở hữu phần cải thiện này; trạng thái hoàn tất ở đây không nghiệm thu bổ sung mới. Không đổi chart, vote hoặc auto-result.
+
+**Bổ sung mode điểm vào:** [Chiến thuật TP/SL 30 phút](../261010-fast-entry-30m-strategy/plan.md) có waiting, explicit paper/manual entry và clock từ entry, tách khỏi vote/reveal hướng giá. Tái dùng chart pan/zoom/click và renderer; không mở tương lai cho decision. Không đổi status lịch sử của plan này để claim chiến thuật đã chạy.
+
 Ba yêu cầu:
 1. Người dùng hiểu AI đang đoán điều gì, vì sao và mức giới hạn của nhận định.
 2. Có preview biểu đồ tại phần nhận định AI và phần kết quả thực tế.
