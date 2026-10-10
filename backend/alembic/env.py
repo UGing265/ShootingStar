@@ -16,7 +16,9 @@ if config.config_file_name is not None:
 
 import os
 import sys
-sys.path.insert(0, os.path.abspath("backend"))
+backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
 
 from shootingstar.adapters.db.models import Base
 from shootingstar.adapters.db.session import get_database_url
