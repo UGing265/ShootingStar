@@ -36,15 +36,23 @@ function parseDateTimeLocalUtc7(val: string): number {
   return Date.UTC(y, m - 1, d, hh - 7, mm, 0, 0);
 }
 
+interface ReplayPlayerProps {
+  snapshots: SnapshotSummary[];
+  initialCandles?: CandleDTO[];
+}
+
 export function ReplayPlayer({
   snapshots,
-}: {
-  snapshots: SnapshotSummary[];
-}) {
+  initialCandles = [],
+}: ReplayPlayerProps) {
   const [activeTab, setActiveTab] = useState<'step1' | 'step2' | 'step3' | 'step4'>('step1');
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string>(snapshots[0]?.id || '');
-  const [candles, setCandles] = useState<CandleDTO[]>([]);
+  const [candles, setCandles] = useState<CandleDTO[]>(initialCandles);
   const [isLoadingCandles, setIsLoadingCandles] = useState<boolean>(false);
+
+  // Compute initial purchase point from initialCandles if present
+  const initialPickIdx = initialCandles.length > 0 ? Math.min(initialCandles.length - 1, Math.max(0, Math.floor(initialCandles.length * 0.75))) : -1;
+  const defaultCandle = initialPickIdx >= 0 ? initialCandles[initialPickIdx] : null;
 
   // Engine & Model selection
   const [engineType, setEngineType] = useState<'external' | 'local'>('external');
@@ -52,9 +60,9 @@ export function ReplayPlayer({
   const [contextVariant, setContextVariant] = useState<ExternalContextVariant>('A');
 
   // Purchase point state
-  const [buyTimeMs, setBuyTimeMs] = useState<number>(0);
-  const [buyPriceInput, setBuyPriceInput] = useState<string>('');
-  const [manualDateTime, setManualDateTime] = useState<string>('');
+  const [buyTimeMs, setBuyTimeMs] = useState<number>(defaultCandle ? defaultCandle.close_time_ms : 0);
+  const [buyPriceInput, setBuyPriceInput] = useState<string>(defaultCandle ? String(defaultCandle.close) : '');
+  const [manualDateTime, setManualDateTime] = useState<string>(defaultCandle ? formatForDateTimeLocalUtc7(defaultCandle.close_time_ms) : '');
   const [horizonMinutes, setHorizonMinutes] = useState<number>(30);
 
   // Pan & Zoom state
@@ -105,13 +113,22 @@ export function ReplayPlayer({
   }, [buyTimeMs, candles]);
 
   // Load candles when selected snapshot changes
+  const isInitialMount = useRef<boolean>(true);
+
+  // Load candles when selected snapshot changes
   useEffect(() => {
     if (!selectedSnapshotId) return;
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      if (initialCandles && initialCandles.length > 0 && selectedSnapshotId === snapshots[0]?.id) {
+        return;
+      }
+    }
     let isCancelled = false;
     setIsLoadingCandles(true);
     setErrorMsg(null);
 
-    fetch(`/api/snapshots/${selectedSnapshotId}/candles?limit=300`)
+    fetch(`/api/snapshots/${selectedSnapshotId}/candles?limit=1000`)
       .then(async (res) => {
         if (!res.ok) {
           const errData = await res.json().catch(() => null);
@@ -164,7 +181,7 @@ export function ReplayPlayer({
 
     canvas.addEventListener('wheel', handleWheel, { passive: false });
     return () => canvas.removeEventListener('wheel', handleWheel);
-  }, [candles.length]);
+  }, [candles.length, activeTab]);
 
   // Global mouse up
   useEffect(() => {
@@ -1242,7 +1259,7 @@ export function ReplayPlayer({
             </div>
           )}
 
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <button
               type="button"
               onClick={() => setActiveTab('step1')}
@@ -1250,13 +1267,38 @@ export function ReplayPlayer({
             >
               ← Quay lại Bước 1
             </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('step3')}
-              style={{ padding: '8px 20px', fontSize: 14, fontWeight: 600, background: '#2563eb', color: '#ffffff', border: 'none', borderRadius: 6, cursor: 'pointer' }}
-            >
-              Tiếp tục: Nhập dự đoán của bạn (Step 3) →
-            </button>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              {externalJob && (
+                <button
+                  type="button"
+                  onClick={handleRunAIJob}
+                  disabled={isLoadingJob}
+                  style={{
+                    padding: '8px 16px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    background: '#f8fafc',
+                    color: '#1e293b',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: 6,
+                    cursor: isLoadingJob ? 'not-allowed' : 'pointer',
+                    opacity: isLoadingJob ? 0.7 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  {isLoadingJob ? 'Đang phân tích lại...' : '🔄 Đánh giá lại'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setActiveTab('step3')}
+                style={{ padding: '8px 20px', fontSize: 14, fontWeight: 600, background: '#2563eb', color: '#ffffff', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+              >
+                Tiếp tục: Nhập dự đoán của bạn (Step 3) →
+              </button>
+            </div>
           </div>
         </div>
       )}
