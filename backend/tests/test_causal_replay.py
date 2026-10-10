@@ -249,7 +249,7 @@ def test_tampered_artifact_checksum_rejection(sample_snapshot_and_models):
 
 def test_feature_availability_latency_filtering_with_model(sample_snapshot_and_models):
     ctx = sample_snapshot_and_models
-    from shootingstar.application.modeling import CalibratedLogisticRegressionModel
+    from shootingstar.application.training.modeling import CalibratedLogisticRegressionModel
     from shootingstar.application.features import FeatureExtractionService
 
     c95 = ctx["candles"][95]
@@ -324,7 +324,7 @@ def test_simulation_job_creation_and_no_model(sample_snapshot_and_models):
 
 def test_simulation_job_model_cutoff_and_horizon_validation(sample_snapshot_and_models):
     from shootingstar.application.features import FeatureExtractionService
-    from shootingstar.application.modeling import CalibratedLogisticRegressionModel
+    from shootingstar.application.training.modeling import CalibratedLogisticRegressionModel
     from shootingstar.application.replay import SimulationJobManager
 
     ctx = sample_snapshot_and_models

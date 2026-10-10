@@ -10,7 +10,7 @@ from shootingstar.application.baselines import (
     SimpleMomentumBaseline,
 )
 from shootingstar.application.features import FeatureExtractionService
-from shootingstar.application.labels import LabelGenerationService
+from shootingstar.application.training.labels import LabelGenerationService
 from shootingstar.domain.models import Candle
 
 

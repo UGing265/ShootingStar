@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 import json
 
-from shootingstar.application.splits import RollingWindowSplitter
-from shootingstar.application.experiment import MultiWindowStudyRunner
+from shootingstar.application.training.splits import RollingWindowSplitter
+from shootingstar.application.training.experiment import MultiWindowStudyRunner
 from shootingstar.domain.models import Candle
 from shootingstar.adapters.storage import SnapshotStorage
 

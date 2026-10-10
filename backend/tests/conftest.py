@@ -16,7 +16,10 @@ def migrated_test_engine():
     test_url = get_database_url(test_mode=True)
     os.environ["SHOOTINGSTAR_DATABASE_URL"] = test_url
 
-    alembic_cfg = Config("alembic.ini")
+    ini_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "alembic.ini")
+    if not os.path.exists(ini_path):
+        ini_path = "alembic.ini"
+    alembic_cfg = Config(ini_path)
     command.upgrade(alembic_cfg, "head")
 
     engine = create_engine(test_url, pool_pre_ping=True)

@@ -6,9 +6,9 @@ import pytest
 
 from shootingstar.adapters.storage import SnapshotStorage
 from shootingstar.application.evaluation import EvaluationReportGenerator
-from shootingstar.application.experiment import ExperimentRunner
-from shootingstar.application.modeling import CalibratedLogisticRegressionModel
-from shootingstar.application.splits import WalkForwardSplitter
+from shootingstar.application.training.experiment import ExperimentRunner
+from shootingstar.application.training.modeling import CalibratedLogisticRegressionModel
+from shootingstar.application.training.splits import WalkForwardSplitter
 from shootingstar.domain.models import Candle
 
 
@@ -230,7 +230,7 @@ def test_baseline_train_only_fitting_no_test_leakage():
 
 def test_walk_forward_splitter_timeframes_anti_leakage():
     """Verifies purge gaps are dynamically derived to prevent lookahead leakage."""
-    from shootingstar.application.splits import WalkForwardSplitter
+    from shootingstar.application.training.splits import WalkForwardSplitter
 
     # 5m candles -> 30m horizon is 6 samples
     splitter_5m = WalkForwardSplitter.for_timeframe("5m", horizon_minutes=30)

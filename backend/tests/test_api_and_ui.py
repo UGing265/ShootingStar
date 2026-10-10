@@ -20,6 +20,16 @@ import uuid
 import pytest
 from starlette.testclient import TestClient
 
+
+def _resolve_pilot_path() -> str:
+    p = Path("data/snapshots/BINANCE_BTCUSDT_5m_1788894000000_1791485999999_97f6323ad2.parquet")
+    if p.exists():
+        return str(p)
+    parent_p = Path("..") / p
+    if parent_p.exists():
+        return str(parent_p)
+    return str(p)
+
 from shootingstar.adapters.db.models import (
     AuditLogModel,
     ExperimentModel,
@@ -208,7 +218,7 @@ def test_api_snapshot_quality_with_and_without_run(client, db_session):
 
 
 def test_api_snapshot_candles_extraction_and_checksum_verification(client, db_session):
-    pilot_path = "data/snapshots/BINANCE_BTCUSDT_5m_1788894000000_1791485999999_97f6323ad2.parquet"
+    pilot_path = _resolve_pilot_path()
     real_sha = hashlib.sha256(Path(pilot_path).read_bytes()).hexdigest()
 
     # Valid registered snapshot: reuse existing if already present
@@ -537,7 +547,7 @@ def test_api_signals_list_and_detail_with_audit_and_review(client, db_session):
 
     # Ensure foreign key experiment exists
     snap_repo = SnapshotRepository(db_session)
-    pilot_path = "data/snapshots/BINANCE_BTCUSDT_5m_1788894000000_1791485999999_97f6323ad2.parquet"
+    pilot_path = _resolve_pilot_path()
     real_sha = hashlib.sha256(Path(pilot_path).read_bytes()).hexdigest()
     existing_snap = snap_repo.get_by_sha256(real_sha)
     snap_id = existing_snap.id if existing_snap else "snap_placeholder"
@@ -650,7 +660,7 @@ def test_api_patterns_endpoint_deterministic_and_404(client, db_session):
 
     # 2. Register deterministic test snapshot
     snap_repo = SnapshotRepository(db_session)
-    pilot_path = "data/snapshots/BINANCE_BTCUSDT_5m_1788894000000_1791485999999_97f6323ad2.parquet"
+    pilot_path = _resolve_pilot_path()
     real_sha = hashlib.sha256(Path(pilot_path).read_bytes()).hexdigest()
 
     snap = SnapshotModel(
