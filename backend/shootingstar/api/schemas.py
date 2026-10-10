@@ -221,3 +221,106 @@ class SignalDetailResponse(BaseModel):
     outcome: Optional[SignalOutcomeDTO] = None
     reviews: List[ReviewOverrideDTO] = Field(default_factory=list)
     audit_logs: List[AuditLogDTO] = Field(default_factory=list)
+
+
+class PreviewIngestionRequest(BaseModel):
+    symbol: str = "BTCUSDT"
+    timeframe: str = "1m"
+    start_time_ms: int
+    end_time_ms: int
+
+
+class PreviewIngestionResponse(BaseModel):
+    symbol: str
+    timeframe: str
+    start_time_ms: int
+    end_time_ms: int
+    estimated_candle_count: int
+    sampled_candles_count: int
+    data_source: str = "Binance Spot REST API (GET /api/v3/klines)"
+    is_bounded: bool = True
+    quality_status: str
+    sample_candles: List[CandleDTO] = Field(default_factory=list)
+    preview_token: str
+
+
+class CreateIngestionJobRequest(BaseModel):
+    symbol: str = "BTCUSDT"
+    timeframe: str = "1m"
+    start_time_ms: int
+    end_time_ms: int
+    preview_token: str
+class IngestionJobResponse(BaseModel):
+    job_id: str
+    symbol: str
+    timeframe: str
+    start_time_ms: int
+    end_time_ms: int
+    status: str
+    created_at: str
+    completed_at: Optional[str] = None
+    snapshot_id: Optional[str] = None
+    valid_candles_count: Optional[int] = None
+    coverage_ratio: Optional[float] = None
+    is_pristine: Optional[bool] = None
+    error_message: Optional[str] = None
+
+
+
+class CreateSimulationJobRequest(BaseModel):
+    snapshot_id: str
+    buy_time_ms: int
+    buy_price: float
+    horizon_minutes: int = 30
+    model_artifact_hash: Optional[str] = None
+
+
+class SimulationAIPredictionDTO(BaseModel):
+    predicted_direction: str
+    probability_up: Optional[float] = None
+    probability_down: Optional[float] = None
+    model_version: Optional[str] = None
+    model_cutoff_ms: Optional[int] = None
+    evidence_summary: Optional[str] = None
+    is_calibrated: bool = False
+
+
+class SimulationUserVoteRequest(BaseModel):
+    user_direction: str
+
+
+class SimulationUserVoteDTO(BaseModel):
+    user_direction: str
+    voted_at_utc: str
+    is_locked: bool = True
+
+
+class SimulationOutcomeDTO(BaseModel):
+    status: str
+    horizon_time_ms: int
+    future_price: Optional[float] = None
+    price_change_pct: Optional[float] = None
+    market_direction: Optional[str] = None
+    ai_is_correct: Optional[bool] = None
+    user_is_correct: Optional[bool] = None
+    unscorable_reason: Optional[str] = None
+    revealed_at_utc: Optional[str] = None
+
+
+class SimulationJobResponse(BaseModel):
+    job_id: str
+    snapshot_id: str
+    symbol: str
+    timeframe: str
+    buy_time_ms: int
+    buy_price: float
+    candle_close_at_buy: float
+    price_offset_pct: float
+    horizon_minutes: int
+    status: str
+    created_at_utc: str
+    ai_prediction: Optional[SimulationAIPredictionDTO] = None
+    user_vote: Optional[SimulationUserVoteDTO] = None
+    outcome: Optional[SimulationOutcomeDTO] = None
+
+
