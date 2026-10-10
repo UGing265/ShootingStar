@@ -3,6 +3,7 @@
 import argparse
 from datetime import datetime, timezone
 import logging
+from pathlib import Path
 import sys
 import uuid
 from shootingstar import __version__
@@ -67,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
     mature_parser = subparsers.add_parser("mature-signals", help="Evaluate pending signals against closed snapshot candles")
     mature_parser.add_argument("--snapshot", required=True, help="Snapshot file path or SHA-256 hash containing recent candles")
     # Command: serve
+    # Command: research-pattern
+    res_parser = subparsers.add_parser("research-pattern", help="Search literature catalogue, inspect with model, and extract verified candidate lessons")
+    res_parser.add_argument("--query", required=True, help="Pattern name or technical analysis concept to research")
+    res_parser.add_argument("--catalogue-dir", help="Optional path to directory containing literature documents")
+    res_parser.add_argument("--live", action="store_true", help="Execute live model extraction with paid Gemini API (default is safe mock mode)")
     serve_parser = subparsers.add_parser("serve", help="Launch the ShootingStar Research Platform web server")
     serve_parser.add_argument("--host", default="127.0.0.1", help="Host interface (default: 127.0.0.1)")
     serve_parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
@@ -245,7 +251,6 @@ def main(argv=None) -> int:
             logger.error("Failed to show snapshot: %s", e)
             return 1
     if args.command == "run-experiment":
-        from pathlib import Path
         from shootingstar.application.training.experiment import ExperimentRunner
 
         snap_arg = Path(args.snapshot)
@@ -273,9 +278,7 @@ def main(argv=None) -> int:
             logger.error("Experiment failed: %s", e)
             return 1
 
-
     if args.command == "scan-patterns":
-        from pathlib import Path
         from shootingstar.adapters.storage import SnapshotStorage
         from shootingstar.application.patterns import PatternLabService
 
@@ -326,7 +329,6 @@ def main(argv=None) -> int:
 
     if args.command == "mature-signals":
         import time
-        from pathlib import Path
         from shootingstar.adapters.storage import SnapshotStorage
         from shootingstar.adapters.db.repository import SignalRepository
         from shootingstar.application.signals import SignalLifecycleService
@@ -357,6 +359,41 @@ def main(argv=None) -> int:
                     matured_count += 1
                     print(f"  Signal {sig.id}: status -> {res.status} (realized: {res.realized_label}, return: {res.realized_return})")
             print(f"Matured {matured_count} signal(s).")
+        return 0
+
+    if args.command == "research-pattern":
+        from shootingstar.adapters.db.repository import LessonRepository
+        from shootingstar.application.external_analysis.lessons import LessonService
+        from shootingstar.application.external_analysis.research_agent import ResearchAgent
+
+        cat_dir = Path(args.catalogue_dir) if args.catalogue_dir else None
+        is_mock = not getattr(args, "live", False)
+        if not is_mock:
+            print("[LIVE RUN] Calling external Gemini API slots. Model quota/cost applies.")
+        else:
+            print("[MOCK RUN] Safe mode enabled (no external API calls, no database persistence).")
+
+        with get_db_session() as session:
+            repo = LessonRepository(session)
+            service = LessonService(repo)
+            agent = ResearchAgent(service, catalogue_dir=cat_dir)
+            result = agent.orchestrate_research(
+                pattern_query=args.query,
+                mock_mode=is_mock,
+            )
+            if is_mock:
+                session.rollback()
+            else:
+                session.commit()
+            print(f"Research Pattern '{args.query}' Status: {result.get('status')}")
+            print(f"Matches found in catalogue: {result.get('matches_found', 0)}")
+            print(f"Candidates extracted: {result.get('candidates_count', 0)}")
+            for cand in result.get("candidates", []):
+                print(f"  - [{cand.get('status')}] {cand.get('title')} (ID: {cand.get('lesson_id')})")
+            if result.get("rejected_count", 0) > 0:
+                print(f"Rejected: {result.get('rejected_count')}")
+                for rej in result.get("rejected", []):
+                    print(f"  x {rej.get('reason')}")
         return 0
 
     if args.command == "serve":

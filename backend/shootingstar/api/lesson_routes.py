@@ -9,6 +9,7 @@ from shootingstar.adapters.db.repository import LessonRepository
 from shootingstar.adapters.db.session import get_db_session
 from shootingstar.api.external_routes import verify_admin_authorization
 from shootingstar.application.external_analysis.lessons import LessonService, LessonWorkflowError
+from shootingstar.application.external_analysis.research_agent import ResearchAgent
 from shootingstar.application.external_analysis.url_validator import SSRFValidationError
 
 router = APIRouter(prefix="/lessons", tags=["Lessons"])
@@ -38,6 +39,10 @@ class NewRevisionRequest(BaseModel):
     reason: Optional[str] = None
     source_snippet: Optional[str] = None
 
+
+class ResearchPatternRequest(BaseModel):
+    pattern_query: str = Field(..., min_length=2, description="Pattern name to search in literature")
+    mock_mode: bool = False
 
 @router.get("", status_code=status.HTTP_200_OK)
 def get_approved_lessons():
@@ -193,3 +198,24 @@ def create_lesson_revision_endpoint(
         except LessonWorkflowError as e:
             session.rollback()
             raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/admin/research", status_code=status.HTTP_200_OK)
+def research_pattern_endpoint(
+    req: ResearchPatternRequest,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """Admin endpoint: orchestrates literature search, model inspection, and verified PENDING submission."""
+    verify_admin_authorization(x_admin_key)
+    with get_db_session() as session:
+        repo = LessonRepository(session)
+        service = LessonService(repo)
+        agent = ResearchAgent(service)
+        result = agent.orchestrate_research(
+            pattern_query=req.pattern_query,
+            mock_mode=req.mock_mode,
+        )
+        if req.mock_mode:
+            session.rollback()
+        else:
+            session.commit()
+        return result
