@@ -31,6 +31,11 @@ dev = [
 [project.scripts]
 shootingstar = "shootingstar.cli.main:main"
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["shootingstar*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["backend"]
+pythonpath = ["."]
+cache_dir = ".pytest_cache"
