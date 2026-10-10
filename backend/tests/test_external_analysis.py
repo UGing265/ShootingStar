@@ -860,3 +860,178 @@ def test_prospective_reveal_gate_pending(tmp_path, migrated_test_engine):
                 s.execute(delete(ExternalAnalysisJobModel).where(ExternalAnalysisJobModel.id == job_id))
             s.execute(delete(SnapshotModel).where(SnapshotModel.id == snap_id))
             s.commit()
+
+def test_gemini_adapter_retries_on_transient_503(monkeypatch):
+    """Contract Test: GeminiModelAdapter catches HTTP 503 and retries with backoff/rotation."""
+    import io
+    import json
+    import urllib.error
+    from shootingstar.adapters.model_api.gemini_adapter import GeminiModelAdapter
+    from shootingstar.adapters.model_api.key_manager import GeminiKeyManager
+
+    key_configs = [("key_alpha", "proj_1"), ("key_beta", "proj_2")]
+    km = GeminiKeyManager(key_configs=key_configs)
+    adapter = GeminiModelAdapter(key_manager=km)
+
+    attempts = []
+
+    def mock_urlopen(req, timeout=None):
+        attempts.append(req.full_url)
+        if len(attempts) == 1:
+            # First attempt fails with 503 Service Unavailable
+            fp = io.BytesIO(b'{"error": {"code": 503, "message": "Service Unavailable"}}')
+            raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", {}, fp)
+        # Second attempt succeeds
+        success_resp = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": json.dumps({
+                                    "observations": [],
+                                    "preliminary_candidates": [],
+                                    "missing_information": [],
+                                    "questions_for_research": [],
+                                })
+                            }
+                        ]
+                    }
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 50, "candidatesTokenCount": 20},
+        }
+        mock_fp = io.BytesIO(json.dumps(success_resp).encode("utf-8"))
+        # Create a mock response object supporting context manager read
+        class MockResponse:
+            def read(self):
+                return mock_fp.read()
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+        return MockResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", mock_urlopen)
+    monkeypatch.setattr("time.sleep", lambda s: None)  # speed up test
+
+    data, slot_idx, body_str = adapter._send_gemini_request({"test": "payload"})
+    assert len(attempts) == 2
+    assert "key=key_alpha" in attempts[0]
+    assert "key=key_beta" in attempts[1]
+    assert slot_idx == 1
+    assert "candidates" in data
+
+def test_gemini_adapter_single_key_503_retries_and_succeeds(monkeypatch):
+    """Contract Test: Single key config retries on 503 and succeeds on subsequent attempt."""
+    import io
+    import json
+    import urllib.error
+    from shootingstar.adapters.model_api.gemini_adapter import GeminiModelAdapter
+    from shootingstar.adapters.model_api.key_manager import GeminiKeyManager
+
+    key_configs = [("single_key", "single_proj")]
+    km = GeminiKeyManager(key_configs=key_configs)
+    adapter = GeminiModelAdapter(key_manager=km)
+
+    attempts = []
+
+    def mock_urlopen(req, timeout=None):
+        attempts.append(req.full_url)
+        if len(attempts) == 1:
+            fp = io.BytesIO(b'{"error": {"code": 503, "message": "The model is overloaded."}}')
+            raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", {}, fp)
+        success_resp = {
+            "candidates": [{"content": {"parts": [{"text": "{}"}]}}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
+        }
+        mock_fp = io.BytesIO(json.dumps(success_resp).encode("utf-8"))
+        class MockResponse:
+            def read(self):
+                return mock_fp.read()
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+        return MockResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", mock_urlopen)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    data, slot_idx, body_str = adapter._send_gemini_request({"test": "payload"})
+    assert len(attempts) == 2
+    assert "key=single_key" in attempts[0]
+    assert "key=single_key" in attempts[1]
+    assert slot_idx == 0
+
+def test_gemini_adapter_exhausted_503_raises_gemini_api_error(monkeypatch):
+    """Contract Test: When all 503 retries are exhausted, raises GeminiAPIError preserving 503 code."""
+    import io
+    import urllib.error
+    from shootingstar.adapters.model_api.gemini_adapter import GeminiAPIError, GeminiModelAdapter
+    from shootingstar.adapters.model_api.key_manager import GeminiKeyManager
+
+    key_configs = [("key_1", "proj_1")]
+    km = GeminiKeyManager(key_configs=key_configs)
+    adapter = GeminiModelAdapter(key_manager=km)
+
+    def mock_urlopen(req, timeout=None):
+        fp = io.BytesIO(b'{"error": {"code": 503, "message": "Service Unavailable"}}')
+        raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", {}, fp)
+
+    monkeypatch.setattr("urllib.request.urlopen", mock_urlopen)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    with pytest.raises(GeminiAPIError) as exc_info:
+        adapter._send_gemini_request({"test": "payload"})
+
+    assert "503" in str(exc_info.value)
+
+def test_build_readable_presentation_context():
+    """Contract Test: build_readable_presentation_context produces deterministic Vietnamese labels and units."""
+    from shootingstar.application.external_analysis.report_presentation import (
+        build_readable_presentation_context,
+        format_ratio_to_percentage,
+        format_usdt_amount,
+        format_btc_volume,
+    )
+
+    assert format_ratio_to_percentage(0.001768) == "+0.1768%"
+    assert format_ratio_to_percentage(-0.000005) == "-0.0005%"
+    assert format_ratio_to_percentage(0.0) == "0.0%"
+    assert format_usdt_amount(63079.76) == "63,079.76 USDT"
+    assert format_btc_volume(1219.5205) == "1,219.5205 BTC"
+
+    feed = {
+        "symbol": "BTCUSDT",
+        "timeframe": "5m",
+        "prediction_time_t_ms": 1786889700000,
+        "purchase_price_p": 63063.05,
+        "horizon_minutes": 30,
+        "candles": [
+            {"open_time_ms": 1786868100000, "close_time_ms": 1786868399999, "close": 62968.45},
+            {"open_time_ms": 1786889400000, "close_time_ms": 1786889699999, "close": 63063.04},
+        ],
+        "features": [
+            {"feature_id": "latest_close_vs_p_pct", "value": -0.000005},
+            {"feature_id": "range_high_6h", "value": 63079.76},
+            {"feature_id": "range_low_6h", "value": 62968.45},
+            {"feature_id": "volatility_6h_pct", "value": 0.001768},
+            {"feature_id": "total_volume_6h", "value": 1219.5205},
+            {"feature_id": "return_1h", "value": -0.000643},
+            {"feature_id": "last_candle_body_ratio", "value": 0.05},
+        ],
+    }
+
+    ctx = build_readable_presentation_context(feed)
+    assert ctx["symbol"] == "BTCUSDT"
+    assert ctx["timeframe"] == "5m"
+    assert "UTC+7" in ctx["prediction_time_utc7"]
+    assert "63,063.05 USDT" in ctx["purchase_price_formatted"]
+    assert len(ctx["canonical_metrics"]) == 7
+
+    metric_map = {m["raw_id"]: m for m in ctx["canonical_metrics"]}
+    assert metric_map["latest_close_vs_p_pct"]["value"] == "-0.0005%"
+    assert metric_map["range_high_6h"]["value"] == "63,079.76 USDT"
+    assert metric_map["volatility_6h_pct"]["value"] == "+0.1768%"
+    assert metric_map["total_volume_6h"]["value"] == "1,219.5205 BTC"

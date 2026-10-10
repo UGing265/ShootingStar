@@ -3,7 +3,10 @@
 import hashlib
 import json
 import logging
+import os
 import re
+import socket
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
@@ -18,6 +21,9 @@ from shootingstar.application.external_analysis.contracts import (
     ResearchSource,
 )
 from shootingstar.application.external_analysis.url_validator import validate_public_https_url
+from shootingstar.application.external_analysis.report_presentation import (
+    build_readable_presentation_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,21 +43,38 @@ class GeminiAuthError(GeminiAPIError):
     pass
 
 
+class GeminiTimeoutError(GeminiAPIError):
+    """Network socket or HTTP timeout contacting Gemini API."""
+    pass
+
+
 class GeminiModelAdapter:
     """Adapter for Google Gemini models enforcing structured outputs and quota safety."""
 
     DEFAULT_MODEL = "gemini-2.5-flash"
+    DEFAULT_TIMEOUT_SECONDS = 90.0
     API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
 
     def __init__(
         self,
         key_manager: Optional[GeminiKeyManager] = None,
-        model_name: str = DEFAULT_MODEL,
-        timeout_seconds: float = 30.0,
+        model_name: Optional[str] = None,
+        timeout_seconds: Optional[float] = None,
     ):
         self.key_manager = key_manager or GeminiKeyManager()
-        self.model_name = model_name
-        self.timeout_seconds = timeout_seconds
+        env_model = os.environ.get("SHOOTINGSTAR_GEMINI_MODEL") or os.environ.get("GEMINI_MODEL")
+        self.model_name = model_name or env_model or self.DEFAULT_MODEL
+
+        env_timeout = os.environ.get("SHOOTINGSTAR_GEMINI_TIMEOUT_SECONDS") or os.environ.get("GEMINI_TIMEOUT_SECONDS")
+        if timeout_seconds is not None:
+            self.timeout_seconds = float(timeout_seconds)
+        elif env_timeout:
+            try:
+                self.timeout_seconds = float(env_timeout)
+            except ValueError:
+                self.timeout_seconds = self.DEFAULT_TIMEOUT_SECONDS
+        else:
+            self.timeout_seconds = self.DEFAULT_TIMEOUT_SECONDS
 
     def _send_gemini_request(
         self,
@@ -59,15 +82,24 @@ class GeminiModelAdapter:
         max_attempts_override: Optional[int] = None,
     ) -> Tuple[Dict[str, Any], int, str]:
         """Core routine managing key rotation, timeouts, errors, and JSON response parsing."""
-        max_attempts = max_attempts_override or max(1, self.key_manager.total_slots)
+        max_attempts = max_attempts_override or max(3, self.key_manager.total_slots * 2)
         last_error: Optional[Exception] = None
 
-        for _ in range(max_attempts):
+        for attempt in range(max_attempts):
             slot = self.key_manager.get_next_slot()
             if not slot:
                 if last_error:
                     raise last_error
                 raise GeminiQuotaExceededError("No available Gemini API key slots (all inactive or in cooldown).")
+
+            logger.info(
+                "🔑 [Gemini Key Manager] Chọn slot #%d (Project: '%s', Key: %s, lần thử %d/%d)",
+                slot.index,
+                slot.project_id,
+                mask_secret(slot.api_key),
+                attempt + 1,
+                max_attempts,
+            )
 
             url = self.API_URL_TEMPLATE.format(model=self.model_name, key=slot.api_key)
             data_bytes = json.dumps(request_body).encode("utf-8")
@@ -84,24 +116,84 @@ class GeminiModelAdapter:
                     data = json.loads(body_str)
                     return data, slot.index, body_str
             except urllib.error.HTTPError as e:
+                sanitized_msg = re.sub(r'key=[^&\s]+', 'key=[REDACTED]', str(e))
                 if e.code in (401, 403):
                     self.key_manager.record_401_403(slot.index, str(e))
-                    last_error = GeminiAuthError(f"Gemini API key in slot #{slot.index} is unauthorized: {e}")
+                    logger.error(
+                        "❌ [Gemini Key Rotation] Slot #%d bị từ chối xác thực (HTTP %s). Vô hiệu hoá slot và xoay sang key tiếp theo...",
+                        slot.index,
+                        e.code,
+                    )
+                    last_error = GeminiAuthError(f"Gemini API key in slot #{slot.index} is unauthorized: {sanitized_msg}")
                     continue
                 elif e.code == 429:
                     self.key_manager.record_429_quota_exhausted(slot.index)
+                    logger.warning(
+                        "⚠️ [Gemini Key Rotation] Slot #%d (Project: '%s') chạm hạn mức 429 (Resource Exhausted). Đang xoay sang project/key khác...",
+                        slot.index,
+                        slot.project_id,
+                    )
                     last_error = GeminiQuotaExceededError(f"Project '{slot.project_id}' rate limited (429).")
+                    time.sleep(1.0)
+                    continue
+                elif e.code in (500, 502, 503, 504):
+                    logger.warning(
+                        "🔄 [Gemini Key Rotation] Slot #%d gặp lỗi máy chủ tạm thời HTTP %s (%s). Xoay sang key tiếp theo (lần thử %d/%d)...",
+                        slot.index,
+                        e.code,
+                        sanitized_msg,
+                        attempt + 1,
+                        max_attempts,
+                    )
+                    last_error = GeminiAPIError(f"Gemini API HTTP {e.code} error: {sanitized_msg}")
+                    backoff = min(1.0 * (1.5 ** min(attempt, 4)), 6.0)
+                    time.sleep(backoff)
                     continue
                 else:
-                    sanitized_msg = re.sub(r'key=[^&\s]+', 'key=[REDACTED]', str(e))
                     raise GeminiAPIError(f"Gemini API HTTP {e.code} error: {sanitized_msg}")
+            except (TimeoutError, socket.timeout) as e:
+                logger.warning(
+                    "⏳ [Gemini Key Rotation] Slot #%d bị timeout sau %ss. Xoay sang key tiếp theo (lần thử %d/%d)...",
+                    slot.index,
+                    self.timeout_seconds,
+                    attempt + 1,
+                    max_attempts,
+                )
+                last_error = GeminiTimeoutError(f"Gemini API request timed out after {self.timeout_seconds}s (slot #{slot.index}): {e}")
+                time.sleep(1.0)
+                continue
             except urllib.error.URLError as e:
                 sanitized_msg = re.sub(r'key=[^&\s]+', 'key=[REDACTED]', str(e))
+                if isinstance(e.reason, (TimeoutError, socket.timeout)) or "timed out" in str(e.reason).lower():
+                    logger.warning(
+                        "⏳ [Gemini Key Rotation] Slot #%d bị ngắt mạng timeout (%s). Xoay sang key tiếp theo (lần thử %d/%d)...",
+                        slot.index,
+                        e.reason,
+                        attempt + 1,
+                        max_attempts,
+                    )
+                    last_error = GeminiTimeoutError(f"Gemini API network timeout after {self.timeout_seconds}s (slot #{slot.index}): {e.reason}")
+                    time.sleep(1.0)
+                    continue
                 raise GeminiAPIError(f"Network error connecting to Gemini API: {sanitized_msg}")
+            except Exception as e:
+                if "timed out" in str(e).lower():
+                    logger.warning(
+                        "⏳ [Gemini Key Rotation] Slot #%d socket/read timeout (%s). Xoay sang key tiếp theo (lần thử %d/%d)...",
+                        slot.index,
+                        e,
+                        attempt + 1,
+                        max_attempts,
+                    )
+                    last_error = GeminiTimeoutError(f"Gemini API read timed out after {self.timeout_seconds}s (slot #{slot.index}): {e}")
+                    time.sleep(1.0)
+                    continue
+                sanitized_msg = re.sub(r'key=[^&\s]+', 'key=[REDACTED]', str(e))
+                raise GeminiAPIError(f"Lỗi kết nối Gemini API: {sanitized_msg}")
 
         if last_error:
             raise last_error
-        raise GeminiQuotaExceededError("Exhausted all Gemini slots.")
+        raise GeminiAPIError("Exhausted all retry attempts connecting to Gemini API.")
 
     def analyze(
         self,
@@ -154,9 +246,9 @@ class GeminiModelAdapter:
         )
         lessons_context = ""
         if approved_lessons:
-            lessons_context = "\nAPPROVED LESSONS REPOSITORY:\n" + json.dumps(approved_lessons, indent=2) + "\n"
+            lessons_context = "\nAPPROVED LESSONS REPOSITORY:\n" + json.dumps(approved_lessons, separators=(",", ":")) + "\n"
 
-        input_context = "\nMARKET DATA CONTEXT (STRICTLY CAUSAL BEFORE CUTOFF):\n" + json.dumps(context_payload, indent=2)
+        input_context = "\nMARKET DATA CONTEXT (STRICTLY CAUSAL BEFORE CUTOFF):\n" + json.dumps(context_payload, separators=(",", ":"))
 
         return schema_instruction + lessons_context + input_context
 
@@ -254,16 +346,24 @@ class GeminiModelAdapter:
             f"{document_text[:8000]}"
         )
 
-        max_attempts = max(1, self.key_manager.total_slots)
+        max_attempts = max(3, self.key_manager.total_slots * 2)
         last_error: Optional[Exception] = None
 
-        for _ in range(max_attempts):
+        for attempt in range(max_attempts):
             slot = self.key_manager.get_next_slot()
             if not slot:
                 if last_error:
                     raise last_error
                 raise GeminiQuotaExceededError("No available Gemini API key slots.")
 
+            logger.info(
+                "🔑 [Gemini Key Manager - Lessons] Chọn slot #%d (Project: '%s', Key: %s, lần thử %d/%d)",
+                slot.index,
+                slot.project_id,
+                mask_secret(slot.api_key),
+                attempt + 1,
+                max_attempts,
+            )
             url = self.API_URL_TEMPLATE.format(model=self.model_name, key=slot.api_key)
             request_body = {
                 "contents": [{"parts": [{"text": prompt_text}]}],
@@ -274,9 +374,6 @@ class GeminiModelAdapter:
             }
 
             try:
-                import urllib.request
-                import json
-
                 req = urllib.request.Request(
                     url,
                     data=json.dumps(request_body).encode("utf-8"),
@@ -292,15 +389,37 @@ class GeminiModelAdapter:
                     if isinstance(lessons, dict):
                         lessons = [lessons]
                     return lessons
+            except urllib.error.HTTPError as e:
+                sanitized_msg = re.sub(r'key=[^&\s]+', 'key=[REDACTED]', str(e))
+                if e.code in (401, 403):
+                    self.key_manager.record_401_403(slot.index, str(e))
+                    logger.error("❌ [Gemini Key Rotation - Lessons] Slot #%d bị từ chối xác thực (HTTP %s). Vô hiệu hoá slot...", slot.index, e.code)
+                    last_error = GeminiAuthError(f"Gemini API key in slot #{slot.index} is unauthorized: {sanitized_msg}")
+                    continue
+                elif e.code == 429:
+                    self.key_manager.record_429_quota_exhausted(slot.index, 60.0)
+                    logger.warning("⚠️ [Gemini Key Rotation - Lessons] Slot #%d chạm hạn mức 429. Đang xoay key...", slot.index)
+                    last_error = GeminiQuotaExceededError(f"Project '{slot.project_id}' rate limited (429).")
+                    time.sleep(1.0)
+                    continue
+                elif e.code in (500, 502, 503, 504):
+                    logger.warning("🔄 [Gemini Key Rotation - Lessons] Slot #%d gặp lỗi HTTP %s. Xoay sang key tiếp theo (lần thử %d/%d)...", slot.index, e.code, attempt + 1, max_attempts)
+                    last_error = GeminiAPIError(f"Gemini API HTTP {e.code} error: {sanitized_msg}")
+                    time.sleep(min(1.0 * (1.5 ** min(attempt, 4)), 5.0))
+                    continue
+                else:
+                    raise GeminiAPIError(f"Error querying Gemini for lesson extraction: {sanitized_msg}")
             except Exception as e:
                 last_error = e
                 if "429" in str(e):
-                    self.key_manager.mark_slot_cooldown(slot.index, 60.0)
+                    self.key_manager.record_429_quota_exhausted(slot.index, 60.0)
+                    time.sleep(1.0)
                     continue
-                import re
                 sanitized_msg = re.sub(r'key=[^&\s]+', 'key=[REDACTED]', str(e))
                 raise GeminiAPIError(f"Error querying Gemini for lesson extraction: {sanitized_msg}")
-        raise GeminiQuotaExceededError("Exhausted all Gemini slots during lesson extraction.")
+        if last_error:
+            raise last_error
+        raise GeminiAPIError("Exhausted all Gemini retry attempts during lesson extraction.")
 
     def _generate_mock_extracted_lessons(
         self,
@@ -370,7 +489,7 @@ class GeminiModelAdapter:
             "  \"missing_information\": [\"Danh sách thông tin cần đối chiếu thêm\"],\n"
             "  \"questions_for_research\": [\"Câu hỏi định nghĩa hoặc điều kiện bác bỏ giao cho agent nghiên cứu\"]\n"
             "}\n\n"
-            f"FEED PAYLOAD:\n{json.dumps(feed_payload, indent=2)}"
+            f"FEED PAYLOAD:\n{json.dumps(feed_payload, separators=(',', ':'))}"
         )
 
         request_body = {
@@ -496,7 +615,7 @@ class GeminiModelAdapter:
             "Search authoritative sources (glossaries, books, academic literature) for candlestick pattern definitions, exact mathematical criteria, and known limitations.\n"
             "DO NOT look up Bitcoin price outcome or historical market results.\n"
             f"RESEARCH QUERY: {query}\n"
-            f"HYPOTHESIS CONTEXT: {json.dumps(hypothesis_context.get('candidates', []), indent=2)}\n\n"
+            f"HYPOTHESIS CONTEXT: {json.dumps(hypothesis_context.get('candidates', []), separators=(',', ':'))}\n\n"
             "Provide structured definitions, criteria formulas, citations, and critical counter-arguments."
         )
 
@@ -699,30 +818,38 @@ class GeminiModelAdapter:
             return self._generate_mock_synthesized_report(
                 feed_dict, hypothesis_dict, research_dict, diagnostics_list, purchase_price_p, custom_mock
             )
+        presentation_ctx = build_readable_presentation_context(feed_dict, purchase_price_p)
 
         prompt = (
             "You are the lead quantitative synthesizer writing a comprehensive, evidence-based Vietnamese report.\n"
             "Synthesize the feed, hypothesis, external research sources, and deterministic Python diagnostic criteria into 7 structured sections.\n"
-            "DO NOT summarize into just 3 sentences. Write a rigorous, detailed analytical report entirely in professional VIETNAMESE (Tiếng Việt).\n\n"
+            "Write a rigorous, detailed analytical report entirely in professional VIETNAMESE (Tiếng Việt).\n\n"
+            "CRITICAL WRITING AND PRESENTATION RULES:\n"
+            "1. DO NOT repeat the section title (e.g. '1. Câu hỏi và dữ liệu') inside the text content.\n"
+            "2. DO NOT output raw code identifiers or variables (e.g. NEVER write candle_178..., close[-1], close[-3], latest_close_vs_p_pct, volatility_6h_pct).\n"
+            "3. DO NOT output scientific notation numbers (e.g. NEVER write -5e-06). Always convert to readable percentages like -0.0005%.\n"
+            "4. When referring to time, use the human-readable UTC+7 timestamps provided in PRESENTATION_CONTEXT (e.g. '10/10/2026 14:00:00 (UTC+7)'), NEVER raw epoch milliseconds.\n"
+            "5. When referring to prices, use USDT; volume, use BTC; returns/ratios, use % with proper decimal precision.\n"
+            "6. Use standard Markdown formatting for pattern lists and bold names (e.g. '* **Tên mẫu hình**: mô tả').\n\n"
             "REQUIRED SECTIONS IN JSON:\n"
             "{\n"
             "  \"direction\": \"UP\" | \"DOWN\" | \"ABSTAIN\",\n"
             "  \"rationale\": \"Tóm tắt lập luận cốt lõi bằng tiếng Việt\",\n"
             "  \"sections\": {\n"
-            "    \"cau_hoi_va_du_lieu\": \"1. Câu hỏi và dữ liệu...\",\n"
-            "    \"dien_bien_quan_sat\": \"2. Diễn biến quan sát...\",\n"
-            "    \"gia_thuyet_va_mau_duoc_kiem\": \"3. Giả thuyết và mẫu được kiểm...\",\n"
-            "    \"tai_lieu_da_tra\": \"4. Tài liệu đã tra...\",\n"
-            "    \"lap_luan_va_phan_bien\": \"5. Lập luận và phản biện...\",\n"
-            "    \"ket_luan_co_dieu_kien\": \"6. Kết luận có điều kiện...\",\n"
-            "    \"gioi_han_va_kha_nang_ap_dung\": \"7. Giới hạn và khả năng áp dụng...\"\n"
+            "    \"cau_hoi_va_du_lieu\": \"Bối cảnh cặp giao dịch, mốc thời gian UTC+7, và câu hỏi nghiên cứu...\",\n"
+            "    \"dien_bien_quan_sat\": \"Diễn biến quan sát trong 6h bằng tiếng Việt với các mốc giá USDT, % biến động...\",\n"
+            "    \"gia_thuyet_va_mau_duoc_kiem\": \"Giả thuyết nến được kiểm tra...\",\n"
+            "    \"tai_lieu_da_tra\": \"Tài liệu đã tra cứu...\",\n"
+            "    \"lap_luan_va_phan_bien\": \"Lập luận và phản biện...\",\n"
+            "    \"ket_luan_co_dieu_kien\": \"Kết luận có điều kiện...\",\n"
+            "    \"gioi_han_va_kha_nang_ap_dung\": \"Giới hạn và khả năng áp dụng...\"\n"
             "  }\n"
             "}\n\n"
-            f"FEED: {json.dumps(feed_dict, indent=2)}\n"
-            f"DIAGNOSTICS: {json.dumps(diagnostics_list, indent=2)}\n"
-            f"RESEARCH: {json.dumps(research_dict, indent=2)}"
+            f"FEED: {json.dumps(feed_dict, separators=(',', ':'))}\n"
+            f"PRESENTATION_CONTEXT: {json.dumps(presentation_ctx, ensure_ascii=False, separators=(',', ':'))}\n"
+            f"DIAGNOSTICS: {json.dumps(diagnostics_list, separators=(',', ':'))}\n"
+            f"RESEARCH: {json.dumps(research_dict, separators=(',', ':'))}"
         )
-
         request_body = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.1, "response_mime_type": "application/json"},
@@ -779,16 +906,20 @@ class GeminiModelAdapter:
         else:
             direction = "ABSTAIN"
 
+        presentation_ctx = build_readable_presentation_context(feed_dict)
+        t_utc7 = presentation_ctx.get("prediction_time_utc7", "N/A")
+        p_formatted = presentation_ctx.get("purchase_price_formatted", f"{purchase_price_p:.2f} USDT")
+
         sec_1 = (
             f"Bài phân tích thực hiện trên cặp giao dịch {symbol} khung thời gian {timeframe}. "
-            f"Mốc thời gian dự đoán cutoff là t={t_ms}, mức giá mua tham chiếu P={purchase_price_p:.2f} USDT, "
+            f"Mốc thời gian dự đoán cutoff là {t_utc7}, mức giá mua tham chiếu {p_formatted}, "
             f"với chân trời dự báo {horizon} phút. Toàn bộ dữ liệu đầu vào tuân thủ nguyên tắc nhân quả (causal window 6 giờ), "
-            f"bao gồm {len(candles)} nến hợp lệ, không chứa bất kỳ thông tin nào sau mốc t."
+            f"bao gồm {len(candles)} nến hợp lệ, không chứa bất kỳ thông tin nào sau mốc cutoff."
         )
 
         sec_2 = (
-            f"Trên cửa sổ 6 giờ trước mốc t, mức giá đóng cửa gần nhất ghi nhận là {latest_close:.2f} USDT "
-            f"(độ lệch {(latest_close - purchase_price_p) / purchase_price_p * 100:.2f}% so với giá mua P). "
+            f"Trên cửa sổ 6 giờ trước mốc cutoff, mức giá đóng cửa gần nhất ghi nhận là {latest_close:,.2f} USDT "
+            f"(độ lệch {(latest_close - purchase_price_p) / purchase_price_p * 100:+.2f}% so với giá mua P). "
             f"Khối lượng giao dịch phân bổ đều đặn, không ghi nhận các khoảng trống dữ liệu (gaps) hoặc cây nến bất thường."
         )
 
