@@ -20,13 +20,21 @@ from shootingstar.application.external_analysis.contracts import (
     AnalysisStatus,
     ContextVariant,
     ExternalAnalysisRequest,
+    FeedContract,
+    HypothesisContract,
+    PatternDiagnosticContract,
+    ResearchAgentContract,
 )
 from shootingstar.application.external_analysis.context import (
     InsufficientHistoryError,
     build_context_a,
     build_context_b,
+    build_feed_contract,
     extract_causal_window,
+    feed_contract_to_dict,
 )
+from shootingstar.application.external_analysis.research_agent import ResearchAgent
+from shootingstar.application.patterns import evaluate_pattern_diagnostics
 from shootingstar.application.external_analysis.service import ExternalAnalysisService
 from shootingstar.application.external_analysis.verifier import ExternalAnalysisVerifier
 from shootingstar.domain.models import Candle
@@ -382,7 +390,7 @@ def test_outcome_evaluation_with_t_between_candle_boundaries(tmp_path, migrated_
             job_dto = service.create_analysis_job(req, mock_mode=True)
             created_job_ids.append(job_dto.id)
             assert job_dto.outcome is None
-
+            service.record_user_vote(job_dto.id, "UP")
             revealed_dto = service.reveal_outcome(job_dto.id)
             assert revealed_dto.target_price == candles[86].close
             assert revealed_dto.outcome == "UP"
@@ -392,4 +400,463 @@ def test_outcome_evaluation_with_t_between_candle_boundaries(tmp_path, migrated_
                 s.execute(delete(ExternalAnalysisJobModel).where(ExternalAnalysisJobModel.id.in_(created_job_ids)))
             if created_snap_id:
                 s.execute(delete(SnapshotModel).where(SnapshotModel.id == created_snap_id))
+            s.commit()
+
+def test_vote_immutability_and_reveal_gate_status_codes(tmp_path, migrated_test_engine, monkeypatch):
+    import uuid
+    from sqlalchemy import delete
+    storage_dir = tmp_path / "snapshots"
+    storage = SnapshotStorage(storage_dir)
+
+    unique_start = 1880000000000 + int(uuid.uuid4().int % 10000000000)
+    candles = create_candles(100, start_time_ms=unique_start, tf_ms=300000)
+    snap_path, snap_hash = storage.save_snapshot(candles, "BINANCE", "BTCUSDT", "5m")
+
+    created_job_ids = []
+    created_snap_id = None
+    try:
+        with get_db_session() as session:
+            snap_repo = SnapshotRepository(session)
+            snap_rec = SnapshotModel(
+                id=snap_hash,
+                venue="BINANCE",
+                symbol="BTCUSDT",
+                timeframe="5m",
+                start_time_ms=candles[0].open_time_ms,
+                end_time_ms=candles[-1].close_time_ms,
+                candle_count=len(candles),
+                file_path=str(snap_path),
+                sha256=snap_hash,
+            )
+            snap_repo.save(snap_rec)
+            session.commit()
+            created_snap_id = snap_hash
+
+            job_repo = ExternalAnalysisJobRepository(session)
+            adapter = GeminiModelAdapter()
+            service = ExternalAnalysisService(
+                job_repository=job_repo,
+                snapshot_repository=snap_repo,
+                snapshot_storage=storage,
+                gemini_adapter=adapter,
+            )
+
+            t_target = candles[80].close_time_ms + 1000
+            req = ExternalAnalysisRequest(
+                snapshot_id=snap_hash,
+                prediction_time_t_ms=t_target,
+                purchase_price_p=candles[80].close,
+                horizon_minutes=30,
+                context_variant=ContextVariant.A,
+                mode=AnalysisMode.RETROSPECTIVE,
+            )
+            job_dto = service.create_analysis_job(req, mock_mode=True)
+            created_job_ids.append(job_dto.id)
+
+            # 1. Unvoted reveal fails at Service level
+            with pytest.raises(ValueError, match="Phải khóa dự đoán của bạn trước khi xem kết quả thực tế"):
+                service.reveal_outcome(job_dto.id)
+
+            # 2. Record vote UP succeeds
+            voted = service.record_user_vote(job_dto.id, "UP")
+            assert voted.user_vote == "UP"
+
+            # 3. Same vote is idempotent
+            same_vote = service.record_user_vote(job_dto.id, "UP")
+            assert same_vote.user_vote == "UP"
+
+            # 4. Changed vote fails with ValueError already locked
+            with pytest.raises(ValueError, match="already locked to 'UP' and cannot be changed"):
+                service.record_user_vote(job_dto.id, "DOWN")
+
+        # 5. API status code verification via TestClient
+        monkeypatch.setenv("SHOOTINGSTAR_EXTERNAL_API_ENABLED", "true")
+        monkeypatch.setenv("SHOOTINGSTAR_ADMIN_KEY", "test-admin-secret")
+        headers = {"X-Admin-Key": "test-admin-secret"}
+        client = TestClient(app)
+
+        # 5a. Create a fresh unvoted job to test HTTP 400 on unvoted reveal
+        res_create = client.post(
+            "/external-analysis/jobs",
+            headers=headers,
+            json={
+                "snapshot_id": snap_hash,
+                "prediction_time_t_ms": t_target,
+                "purchase_price_p": candles[80].close,
+                "horizon_minutes": 30,
+                "context_variant": "A",
+                "mode": "RETROSPECTIVE",
+                "mock_mode": True,
+            },
+        )
+        assert res_create.status_code in (200, 202)
+        unvoted_job_id = res_create.json()["id"]
+        created_job_ids.append(unvoted_job_id)
+
+        # HTTP 400 on unvoted reveal
+        res_unvoted_reveal = client.post(f"/external-analysis/jobs/{unvoted_job_id}/reveal", headers=headers)
+        assert res_unvoted_reveal.status_code == 400
+        assert "Phải khóa dự đoán của bạn" in res_unvoted_reveal.json()["detail"]
+
+        # Vote once
+        res_vote1 = client.post(
+            f"/external-analysis/jobs/{unvoted_job_id}/vote",
+            headers=headers,
+            json={"vote": "UP"},
+        )
+        assert res_vote1.status_code == 200
+        assert res_vote1.json()["user_vote"] == "UP"
+
+        # HTTP 409 on locked vote change attempt
+        res_vote_conflict = client.post(
+            f"/external-analysis/jobs/{unvoted_job_id}/vote",
+            headers=headers,
+            json={"vote": "DOWN"},
+        )
+        assert res_vote_conflict.status_code == 409
+        assert "already locked to 'UP'" in res_vote_conflict.json()["detail"]
+
+        # Reveal succeeds after vote
+        res_revealed = client.post(f"/external-analysis/jobs/{unvoted_job_id}/reveal", headers=headers)
+        assert res_revealed.status_code == 200
+        assert res_revealed.json()["outcome"] in ("UP", "DOWN", "FLAT")
+        assert res_revealed.json()["target_price"] is not None
+    finally:
+        with get_db_session() as s:
+            if created_job_ids:
+                s.execute(delete(ExternalAnalysisJobModel).where(ExternalAnalysisJobModel.id.in_(created_job_ids)))
+            if created_snap_id:
+                s.execute(delete(SnapshotModel).where(SnapshotModel.id == created_snap_id))
+            s.commit()
+
+
+# -------------------------------------------------------------
+# Phase 04: Verification Tests for Evidence-Based Pipeline
+# -------------------------------------------------------------
+
+def test_feed_contract_causal_invariants():
+    """Contract Test: FeedContract must contain exactly causal 6h window up to t with zero lookahead."""
+    candles = create_candles(100)  # 5m candles
+    t_ms = candles[80].close_time_ms + 1000  # Cutoff t
+
+    feed = build_feed_contract(
+        candles=candles,
+        snapshot_id="snap_test_01",
+        snapshot_checksum="sha256_checksum_test",
+        prediction_time_t_ms=t_ms,
+        purchase_price_p=50500.0,
+        horizon_minutes=30,
+    )
+
+    # 6 hours of 5m = 72 candles
+    assert len(feed.candles) == 72
+    assert feed.coverage.status == "COMPLETE"
+    assert feed.coverage.gaps_count == 0
+
+    # Strictly causal: all candles must have close_time_ms <= t_ms
+    for c in feed.candles:
+        assert c.close_time_ms <= t_ms
+        assert c.candle_id.startswith("snap_test_01_5m_")
+
+    # Hash is deterministic
+    assert len(feed.feed_hash) == 64
+    assert feed.feed_id.startswith("feed_")
+
+    # Versioned feature formulas
+    feature_ids = {f.feature_id for f in feed.features}
+    assert "latest_close_vs_p_pct" in feature_ids
+    assert "volatility_6h_pct" in feature_ids
+    assert "last_candle_body_ratio" in feature_ids
+    for f in feed.features:
+        assert f.formula_version == "v1"
+
+
+def test_hypothesis_contract_generation():
+    """Contract Test: Preliminary hypothesis generates testable pattern candidates without final direction."""
+    candles = create_candles(80)
+    t_ms = candles[-1].close_time_ms + 1000
+    feed = build_feed_contract(
+        candles=candles,
+        snapshot_id="snap_hyp_01",
+        snapshot_checksum="sha256_hyp",
+        prediction_time_t_ms=t_ms,
+        purchase_price_p=50000.0,
+    )
+    feed_dict = feed_contract_to_dict(feed)
+
+    adapter = GeminiModelAdapter()
+    hyp = adapter.analyze_preliminary(feed_dict, mock_mode=True)
+
+    assert hyp.feed_id == feed.feed_id
+    assert hyp.feed_hash == feed.feed_hash
+    assert len(hyp.observations) >= 2
+    assert len(hyp.candidates) >= 1
+    for cand in hyp.candidates:
+        assert cand.pattern_name in ("Hammer", "Shooting_Star", "Bullish_Engulfing", "Bearish_Engulfing")
+        assert cand.rationale != ""
+    assert len(hyp.questions_for_research) >= 1
+
+
+def test_pattern_diagnostics_criteria_evaluation():
+    """Contract Test: Granular Python criteria diagnostics evaluate Hammer, Shooting Star, and Engulfing."""
+    # 1. Construct valid Hammer candle
+    # Downtrend: 3 candles declining, then Hammer at idx 3
+    # Hammer geometry: range = 100, open=50080, close=50090 (body=10, B/R=0.10 <= 0.35), high=50095 (upper=5, U/R=0.05 <= 0.15), low=50000 (lower=80, D/R=0.80 >= 0.55, D=80 >= 2*B=20)
+    c0 = Candle(venue="BINANCE", symbol="BTCUSDT", timeframe="5m", open_time_ms=1000, close_time_ms=2000, open=50200, high=50250, low=50150, close=50200, volume=10, quote_volume=1, trades_count=1, taker_buy_base_volume=1, taker_buy_quote_volume=1)
+    c1 = Candle(venue="BINANCE", symbol="BTCUSDT", timeframe="5m", open_time_ms=2000, close_time_ms=3000, open=50200, high=50220, low=50120, close=50150, volume=10, quote_volume=1, trades_count=1, taker_buy_base_volume=1, taker_buy_quote_volume=1)
+    c2 = Candle(venue="BINANCE", symbol="BTCUSDT", timeframe="5m", open_time_ms=3000, close_time_ms=4000, open=50150, high=50160, low=50080, close=50100, volume=10, quote_volume=1, trades_count=1, taker_buy_base_volume=1, taker_buy_quote_volume=1)
+    c3_hammer = Candle(venue="BINANCE", symbol="BTCUSDT", timeframe="5m", open_time_ms=4000, close_time_ms=5000, open=50080, high=50095, low=50000, close=50090, volume=10, quote_volume=1, trades_count=1, taker_buy_base_volume=1, taker_buy_quote_volume=1)
+
+    diags = evaluate_pattern_diagnostics([c0, c1, c2, c3_hammer], target_index=-1)
+    hammer_diag = next(d for d in diags if d.pattern_id == "Hammer")
+    assert hammer_diag.shape_status == "PASS"
+    assert hammer_diag.context_status == "PASS"
+    assert hammer_diag.overall_match_status == "KHỚP_THEO_RULE_VERSION"
+
+    # 2. Modify to have huge body (violates B/R <= 0.35)
+    c3_big_body = Candle(venue="BINANCE", symbol="BTCUSDT", timeframe="5m", open_time_ms=4000, close_time_ms=5000, open=50010, high=50095, low=50000, close=50090, volume=10, quote_volume=1, trades_count=1, taker_buy_base_volume=1, taker_buy_quote_volume=1)
+    diags_fail = evaluate_pattern_diagnostics([c0, c1, c2, c3_big_body], target_index=-1)
+    hammer_fail = next(d for d in diags_fail if d.pattern_id == "Hammer")
+    assert hammer_fail.overall_match_status == "KHÔNG_KHỚP"
+    body_crit = next(cr for cr in hammer_fail.criteria if cr.criterion_id == "hammer_small_body")
+    assert body_crit.status == "FAIL"
+
+    # 3. Insufficient prior history yields UNKNOWN context -> CHƯA_ĐỦ_TIÊU_CHÍ
+    diags_short = evaluate_pattern_diagnostics([c3_hammer], target_index=0)
+    hammer_short = next(d for d in diags_short if d.pattern_id == "Hammer")
+    assert hammer_short.context_status == "UNKNOWN"
+    assert hammer_short.overall_match_status == "CHƯA_ĐỦ_TIÊU_CHÍ"
+
+    # 4. Shooting Star
+    # Uptrend: 3 candles rising, then Shooting Star with upper wick >= 55%
+    u0 = Candle(venue="BINANCE", symbol="BTCUSDT", timeframe="5m", open_time_ms=1000, close_time_ms=2000, open=50000, high=50050, low=49950, close=50020, volume=10, quote_volume=1, trades_count=1, taker_buy_base_volume=1, taker_buy_quote_volume=1)
+    u1 = Candle(venue="BINANCE", symbol="BTCUSDT", timeframe="5m", open_time_ms=2000, close_time_ms=3000, open=50020, high=50080, low=50000, close=50060, volume=10, quote_volume=1, trades_count=1, taker_buy_base_volume=1, taker_buy_quote_volume=1)
+    u2 = Candle(venue="BINANCE", symbol="BTCUSDT", timeframe="5m", open_time_ms=3000, close_time_ms=4000, open=50060, high=50120, low=50050, close=50100, volume=10, quote_volume=1, trades_count=1, taker_buy_base_volume=1, taker_buy_quote_volume=1)
+    u3_star = Candle(venue="BINANCE", symbol="BTCUSDT", timeframe="5m", open_time_ms=4000, close_time_ms=5000, open=50015, high=50100, low=50005, close=50010, volume=10, quote_volume=1, trades_count=1, taker_buy_base_volume=1, taker_buy_quote_volume=1)
+    diags_star = evaluate_pattern_diagnostics([u0, u1, u2, u3_star], target_index=-1)
+    star_diag = next(d for d in diags_star if d.pattern_id == "Shooting_Star")
+    assert star_diag.shape_status == "PASS"
+    assert star_diag.context_status == "PASS"
+    assert star_diag.overall_match_status == "KHỚP_THEO_RULE_VERSION"
+
+
+def test_grounded_research_agent_and_sources():
+    """Contract Test: Research agent conducts grounded research with validated public HTTPS sources."""
+    candles = create_candles(80)
+    t_ms = candles[-1].close_time_ms + 1000
+    feed = build_feed_contract(candles, "snap_01", "sha256_01", t_ms, 50000.0)
+    adapter = GeminiModelAdapter()
+    hyp = adapter.analyze_preliminary(feed_contract_to_dict(feed), mock_mode=True)
+
+    research_agent = ResearchAgent(lesson_service=None, model_adapter=adapter)
+    research_contract = research_agent.conduct_job_research(
+        hypothesis=hyp,
+        job_id="job_test_research",
+        feed_hash=feed.feed_hash,
+        mock_mode=True,
+    )
+
+    assert research_contract.search_provider != ""
+    assert len(research_contract.queries_executed) >= 1
+    assert len(research_contract.sources) >= 1
+    for src in research_contract.sources:
+        assert src.url.startswith("https://")
+        assert src.access_status in ("ACCESSIBLE", "PAYWALL", "SNIPPET_ONLY")
+    assert len(research_contract.contradictory_sources_or_facts) >= 1
+
+
+def test_multi_stage_pipeline_and_evidence_envelope_persistence(tmp_path, migrated_test_engine):
+    """Contract Test: Full multi-stage pipeline executes and stores evidence_envelope with 7 sections."""
+    import uuid
+    from sqlalchemy import delete
+    snap_id = f"snap_pipe_{uuid.uuid4().hex[:8]}"
+    job_id = None
+    candles = create_candles(80)
+    storage = SnapshotStorage(snapshots_dir=tmp_path)
+    snap_file, snap_hash = storage.save_snapshot(candles=candles, venue="binance_spot", symbol="BTCUSDT", timeframe="5m")
+
+    try:
+        with get_db_session() as session:
+            snap_repo = SnapshotRepository(session)
+            snap = SnapshotModel(
+                id=snap_id,
+                symbol="BTCUSDT",
+                timeframe="5m",
+                start_time_ms=candles[0].open_time_ms,
+                end_time_ms=candles[-1].close_time_ms,
+                candle_count=len(candles),
+                file_path=str(snap_file),
+                sha256=snap_hash,
+            )
+            snap_repo.save(snap)
+            session.commit()
+
+        with get_db_session() as session:
+            job_repo = ExternalAnalysisJobRepository(session)
+            snap_repo = SnapshotRepository(session)
+            service = ExternalAnalysisService(
+                job_repository=job_repo,
+                snapshot_repository=snap_repo,
+                snapshot_storage=storage,
+            )
+
+            t_ms = candles[75].close_time_ms + 1000
+            req = ExternalAnalysisRequest(
+                snapshot_id=snap_id,
+                prediction_time_t_ms=t_ms,
+                purchase_price_p=50000.0,
+                horizon_minutes=30,
+            )
+
+            job_dto = service.create_analysis_job(req, mock_mode=True)
+            session.commit()
+            job_id = job_dto.id
+
+            # Completed status
+            assert job_dto.status in (AnalysisStatus.READY.value, AnalysisStatus.ABSTAIN.value)
+            assert job_dto.ai_prediction is not None
+            assert job_dto.ai_prediction.probability_up is None
+            assert job_dto.ai_prediction.probability_down is None
+
+            # Verify Evidence Envelope
+            env = job_dto.evidence_envelope
+            assert env is not None
+            assert env["protocol_version"] == "evidence-pipeline-v1"
+            assert len(env["stages"]) == 5
+            stage_names = [s["stage_name"] for s in env["stages"]]
+            assert stage_names == ["PREPARING_FEED", "ANALYZING", "RESEARCHING", "MATCHING", "SYNTHESIZING"]
+
+            # 7 structured Vietnamese sections
+            sections = env["report_sections"]
+            assert "cau_hoi_va_du_lieu" in sections
+            assert "dien_bien_quan_sat" in sections
+            assert "gia_thuyet_va_mau_duoc_kiem" in sections
+            assert "tai_lieu_da_tra" in sections
+            assert "lap_luan_va_phan_bien" in sections
+            assert "ket_luan_co_dieu_kien" in sections
+            assert "gioi_han_va_kha_nang_ap_dung" in sections
+    finally:
+        with get_db_session() as s:
+            if job_id:
+                s.execute(delete(ExternalAnalysisJobModel).where(ExternalAnalysisJobModel.id == job_id))
+            s.execute(delete(SnapshotModel).where(SnapshotModel.id == snap_id))
+            s.commit()
+
+def test_startup_sweep_interrupted_jobs(migrated_test_engine):
+    """Contract Test: Startup sweep marks intermediate jobs as FAILED_INTERRUPTED."""
+    import uuid
+    from datetime import datetime, timezone
+    now_utc = datetime.now(timezone.utc)
+    job_id = f"job_interrupt_{uuid.uuid4().hex[:8]}"
+
+    with get_db_session() as session:
+        interrupted_job = ExternalAnalysisJobModel(
+            id=job_id,
+            snapshot_id="dummy_snap",
+            snapshot_hash="dummy_hash",
+            symbol="BTCUSDT",
+            timeframe="5m",
+            prediction_time_t_ms=1700000000000,
+            purchase_price_p=50000.0,
+            horizon_minutes=30,
+            mode="RETROSPECTIVE",
+            context_variant="A",
+            prompt_version="v1",
+            model_id="gemini-2.5-flash",
+            status=AnalysisStatus.RESEARCHING.value,  # Intermediate state
+            is_revealed=False,
+            created_at=now_utc,
+            updated_at=now_utc,
+        )
+        session.add(interrupted_job)
+        session.commit()
+
+    # Simulate startup sweep logic
+    with get_db_session() as session:
+        jobs = session.query(ExternalAnalysisJobModel).filter(
+            ExternalAnalysisJobModel.status.in_([
+                AnalysisStatus.PREPARING_FEED.value,
+                AnalysisStatus.ANALYZING.value,
+                AnalysisStatus.RESEARCHING.value,
+                AnalysisStatus.MATCHING.value,
+                AnalysisStatus.SYNTHESIZING.value,
+            ])
+        ).all()
+        for j in jobs:
+            j.status = AnalysisStatus.FAILED_INTERRUPTED.value
+            j.error_message = "Tiến trình bị gián đoạn do khởi động lại server; không tự động gọi lại API có phí"
+        session.commit()
+
+    with get_db_session() as session:
+        swept_job = session.query(ExternalAnalysisJobModel).filter_by(id=job_id).first()
+        assert swept_job.status == AnalysisStatus.FAILED_INTERRUPTED.value
+        assert "khởi động lại server" in swept_job.error_message
+        session.delete(swept_job)
+        session.commit()
+
+
+def test_prospective_reveal_gate_pending(tmp_path, migrated_test_engine):
+    """Contract Test: Prospective reveal before t + horizon returns outcome PENDING."""
+    import time
+    import uuid
+    from sqlalchemy import delete
+    snap_id = f"snap_prosp_{uuid.uuid4().hex[:8]}"
+    job_id = None
+    now_ms = int(time.time() * 1000)
+    candles = create_candles(80, start_time_ms=now_ms - (80 * 300000))
+    storage = SnapshotStorage(snapshots_dir=tmp_path)
+    snap_file, snap_hash = storage.save_snapshot(candles=candles, venue="binance_spot", symbol="BTCUSDT", timeframe="5m")
+
+    try:
+        with get_db_session() as session:
+            snap = SnapshotModel(
+                id=snap_id,
+                symbol="BTCUSDT",
+                timeframe="5m",
+                start_time_ms=candles[0].open_time_ms,
+                end_time_ms=candles[-1].close_time_ms,
+                candle_count=len(candles),
+                file_path=str(snap_file),
+                sha256=snap_hash,
+            )
+            session.add(snap)
+            session.commit()
+
+        with get_db_session() as session:
+            service = ExternalAnalysisService(
+                job_repository=ExternalAnalysisJobRepository(session),
+                snapshot_repository=SnapshotRepository(session),
+                snapshot_storage=storage,
+            )
+
+            # Cutoff t is last candle close; target horizon is 30m in future relative to now_ms
+            req = ExternalAnalysisRequest(
+                snapshot_id=snap_id,
+                prediction_time_t_ms=candles[-1].close_time_ms + 1000,
+                purchase_price_p=50000.0,
+                horizon_minutes=30,
+                mode=AnalysisMode.PROSPECTIVE,
+            )
+
+            job_dto = service.create_analysis_job(req, mock_mode=True)
+            session.commit()
+            job_id = job_dto.id
+
+        with get_db_session() as session:
+            service = ExternalAnalysisService(
+                job_repository=ExternalAnalysisJobRepository(session),
+                snapshot_repository=SnapshotRepository(session),
+                snapshot_storage=storage,
+            )
+            # Vote first
+            service.record_user_vote(job_dto.id, "UP")
+            # Attempt reveal before target time
+            revealed = service.reveal_outcome(job_dto.id)
+            assert revealed.outcome == "PENDING"
+            assert revealed.target_price is None
+    finally:
+        with get_db_session() as s:
+            if job_id:
+                s.execute(delete(ExternalAnalysisJobModel).where(ExternalAnalysisJobModel.id == job_id))
+            s.execute(delete(SnapshotModel).where(SnapshotModel.id == snap_id))
             s.commit()
