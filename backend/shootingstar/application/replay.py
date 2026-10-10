@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
 import numpy as np
@@ -68,6 +68,8 @@ class SimulationJob:
     ai_prediction: Optional[SimulationAIPrediction] = None
     user_vote: Optional[SimulationUserVote] = None
     outcome: Optional[SimulationOutcome] = None
+    strategy_evaluation: Optional[Dict[str, Any]] = None
+    strategy_outcome: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> dict:
         return {
@@ -85,6 +87,8 @@ class SimulationJob:
             "ai_prediction": self.ai_prediction.__dict__ if self.ai_prediction else None,
             "user_vote": self.user_vote.__dict__ if self.user_vote else None,
             "outcome": self.outcome.__dict__ if self.outcome else None,
+            "strategy_evaluation": self.strategy_evaluation,
+            "strategy_outcome": self.strategy_outcome,
         }
 
     @classmethod
@@ -107,6 +111,8 @@ class SimulationJob:
             ai_prediction=ai_pred,
             user_vote=vote,
             outcome=outcome,
+            strategy_evaluation=d.get("strategy_evaluation"),
+            strategy_outcome=d.get("strategy_outcome"),
         )
 
 
@@ -184,6 +190,13 @@ class SimulationJobManager:
             model_artifact_hash=model_artifact_hash,
         )
 
+        # Evaluate fast-entry 30m barrier strategy offline without lookahead
+        strategy_evaluation = self._evaluate_strategy_candidate(
+            visible_candles=visible_candles,
+            buy_time_ms=buy_time_ms,
+            horizon_minutes=horizon_minutes,
+        )
+
         from datetime import datetime, timezone
         job_id = str(uuid.uuid4())
         now_utc = datetime.now(timezone.utc).isoformat()
@@ -203,9 +216,83 @@ class SimulationJobManager:
             ai_prediction=ai_prediction,
             user_vote=None,
             outcome=None,
+            strategy_evaluation=strategy_evaluation,
+            strategy_outcome=None,
         )
         self._persist_job(job)
         return job
+    def _evaluate_strategy_candidate(
+        self,
+        visible_candles: List[Candle],
+        buy_time_ms: int,
+        horizon_minutes: int,
+    ) -> Dict[str, Any]:
+        from decimal import Decimal
+        from shootingstar.application.entry_strategy import EntryStrategyEngine
+        from shootingstar.domain.trade_plan import CandidateState, ObservationDecision, RiskConfig, SymbolFilters
+
+        engine = EntryStrategyEngine()
+        symbol = visible_candles[0].symbol if visible_candles else "BTCUSDT"
+        symbol_filters = SymbolFilters(
+            symbol=symbol,
+            tick_size=Decimal("0.01"),
+            step_size=Decimal("0.00001"),
+            min_notional=Decimal("5.0"),
+            min_qty=Decimal("0.00001"),
+        )
+        risk_config = RiskConfig(
+            max_notional_usdt=Decimal("2000.00"),
+            max_planned_loss_usdt=Decimal("100.00"),
+            fee_rate_bps=Decimal("10.0"),  # VIP 0 10 bps
+            slippage_bps=Decimal("5.0"),   # Registered baseline
+            max_wait_duration_ms=horizon_minutes * 60 * 1000,
+            max_entry_deviation_pct=Decimal("0.002"),
+            freshness_tolerance_ms=120000,
+            max_event_lag_ms=5000,
+            cost_model_source="vip0-doc",
+        )
+
+        plan, decision, reasons = engine.create_candidate(
+            candles=visible_candles,
+            decision_time_ms=buy_time_ms,
+            available_cutoff_ms=buy_time_ms,
+            symbol_filters=symbol_filters,
+            risk_config=risk_config,
+        )
+
+        if plan is None:
+            return {
+                "strategy_version": engine.strategy_version,
+                "candidate_state": "NO_SETUP",
+                "decision": decision.value,
+                "reasons": [r.value for r in reasons],
+                "proposed_entry": None,
+                "zone_low": None,
+                "zone_high": None,
+                "target_price": None,
+                "stop_price": None,
+                "reward_risk_ratio": None,
+                "support_level": None,
+                "reclaim_level": None,
+                "is_trade_eligible": False,
+            }
+        return {
+            "strategy_version": plan.strategy_version,
+            "candidate_state": plan.candidate_state.value,
+            "decision": decision.value,
+            "reasons": [r.value for r in reasons],
+            "proposed_entry": float(plan.entry_zone.proposed_entry),
+            "zone_low": float(plan.entry_zone.min_price),
+            "zone_high": float(plan.entry_zone.max_price),
+            "target_price": float(plan.target_price),
+            "stop_price": float(plan.stop_price),
+            "reward_risk_ratio": float(plan.reward_risk_ratio) if hasattr(plan, "reward_risk_ratio") else float((plan.target_price - plan.proposed_entry) / (plan.proposed_entry - plan.stop_price)),
+            "support_level": float(plan.confirmation.support_level),
+            "reclaim_level": float(plan.confirmation.reclaim_level),
+            "has_setup": True,
+            "is_trade_eligible": decision == ObservationDecision.BUY_ELIGIBLE,
+        }
+
 
     def _evaluate_ai_prediction(
         self,
@@ -359,6 +446,73 @@ class SimulationJobManager:
             user_is_correct=user_ok,
             revealed_at_utc=now_utc,
         )
+        job.status = "REVEALED"
+        # Evaluate barrier strategy outcome causally
+        strategy_outcome: Optional[Dict[str, Any]] = None
+        strat_eval = job.strategy_evaluation
+        if strat_eval and strat_eval.get("is_trade_eligible") and strat_eval.get("proposed_entry"):
+            from decimal import Decimal
+            from shootingstar.application.barrier_evaluation import FirstTouchLabeler
+
+            proposed_entry = Decimal(str(strat_eval["proposed_entry"]))
+            target_price = Decimal(str(strat_eval["target_price"]))
+            stop_price = Decimal(str(strat_eval["stop_price"]))
+
+            forward_candles = [
+                c for c in candles
+                if c.open_time_ms >= job.buy_time_ms and c.open_time_ms < target_time_ms
+            ]
+            in_horizon_candles = [c for c in forward_candles if (c.close_time_ms + 1) <= target_time_ms]
+
+            entry_triggered = False
+            fill_candle_idx = -1
+            for idx, c in enumerate(in_horizon_candles):
+                if Decimal(str(c.low)) <= proposed_entry <= Decimal(str(c.high)):
+                    entry_triggered = True
+                    fill_candle_idx = idx
+                    break
+
+            if not entry_triggered:
+                strategy_outcome = {
+                    "trade_executed": False,
+                    "reason": "Price never reached proposed entry within horizon window (UNFILLED).",
+                    "outcome": "UNFILLED",
+                    "net_return_pct": None,
+                }
+            else:
+                labeler = FirstTouchLabeler()
+                fill_candle = in_horizon_candles[fill_candle_idx]
+                remaining_candles = forward_candles[fill_candle_idx:]
+
+                barrier_res = labeler.evaluate_path(
+                    entry_price=proposed_entry,
+                    target_price=target_price,
+                    stop_price=stop_price,
+                    entry_time_ms=fill_candle.open_time_ms,
+                    deadline_ms=target_time_ms,
+                    candles=remaining_candles,
+                    fee_rate_bps=Decimal("10.0"),
+                    slippage_bps=Decimal("5.0"),
+                    has_quote_depth=False,
+                )
+                strategy_outcome = {
+                    "trade_executed": True,
+                    **barrier_res.to_dict(),
+                }
+        else:
+            reason = "No trade-eligible candidate plan at decision time (NO_TRADE)."
+            if strat_eval and strat_eval.get("decision") == "WAIT_CONFIRMATION":
+                reason = "Candidate pending confirmation (WAIT_CONFIRMATION / NO_TRADE)."
+            elif strat_eval and strat_eval.get("decision") == "WATCH_ONLY":
+                reason = "Candidate setup confirmed but probability/cost unverified (WATCH_ONLY / NO_TRADE)."
+            strategy_outcome = {
+                "trade_executed": False,
+                "reason": reason,
+                "outcome": "NO_TRADE",
+                "net_return_pct": None,
+            }
+
+        job.strategy_outcome = strategy_outcome
         job.status = "REVEALED"
         self._persist_job(job)
         return job

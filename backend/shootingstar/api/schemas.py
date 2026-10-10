@@ -4,6 +4,7 @@ Strict security invariant: No credentials, raw file paths, raw payloads,
 or sensitive internal details are exposed in API responses.
 """
 
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
@@ -322,5 +323,102 @@ class SimulationJobResponse(BaseModel):
     ai_prediction: Optional[SimulationAIPredictionDTO] = None
     user_vote: Optional[SimulationUserVoteDTO] = None
     outcome: Optional[SimulationOutcomeDTO] = None
+    strategy_evaluation: Optional[Dict[str, Any]] = None
+    strategy_outcome: Optional[Dict[str, Any]] = None
 
 
+
+
+class TradeWatchCreateRequest(BaseModel):
+    symbol: str = Field("BTCUSDT", description="Target trading pair")
+    max_notional_usdt: Decimal = Field(..., description="Mandatory maximum position notional in USDT")
+    max_planned_loss_usdt: Decimal = Field(..., description="Mandatory maximum planned loss in USDT")
+    fee_rate_bps: Decimal = Field(..., description="Mandatory fee rate in basis points")
+    slippage_bps: Decimal = Field(..., description="Mandatory slippage allowance in basis points")
+    max_wait_duration_ms: int = Field(..., description="Mandatory candidate wait expiration duration in ms")
+    max_entry_deviation_pct: Decimal = Field(..., description="Mandatory max entry deviation percentage")
+    freshness_tolerance_ms: int = Field(..., description="Mandatory live freshness tolerance in ms")
+    max_event_lag_ms: int = Field(..., description="Mandatory max event lag in ms")
+    cost_model_source: str = Field(..., description="Mandatory fee/slippage evidence reference")
+    strategy_version: str = Field("v1-support-reclaim-30m", description="Strategy rule version")
+
+
+class TradeWatchResponse(BaseModel):
+    id: str
+    operator_id: str
+    symbol: str
+    status: str
+    position_state: str
+    strategy_version: str
+    risk_config: Dict[str, Any]
+    symbol_filters: Dict[str, Any]
+    active_candidate_id: Optional[str] = None
+    execution_mode: Optional[str] = None
+    opened_at_ms: Optional[int] = None
+    deadline_ms: Optional[int] = None
+    closed_at_ms: Optional[int] = None
+    created_at: str
+    updated_at: str
+
+
+class EntryObservationRequest(BaseModel):
+    mode: str = Field(..., description="PAPER or MANUAL_REPORTED")
+    price: Decimal = Field(..., description="Actual or paper fill price")
+    quantity: Decimal = Field(..., description="Actual or paper fill quantity")
+    actual_entry_time_ms: int = Field(..., description="Timestamp of entry execution")
+    idempotency_key: str = Field(..., description="Client-provided idempotency key")
+    recent_lowest_price: Optional[Decimal] = Field(None, description="Lowest price observed since actual entry time")
+    notes: Optional[str] = None
+
+
+class ExitObservationRequest(BaseModel):
+    mode: str = Field(..., description="PAPER or MANUAL_REPORTED")
+    price: Decimal = Field(..., description="Actual or paper exit price")
+    quantity: Decimal = Field(..., description="Actual or paper exit quantity")
+    exit_reason: str = Field(..., description="TP_HIT, SL_HIT, TIMEOUT, or MANUAL_CANCEL")
+    actual_exit_time_ms: int = Field(..., description="Timestamp of exit execution")
+    idempotency_key: str = Field(..., description="Client-provided idempotency key")
+    notes: Optional[str] = None
+
+
+class TradeObservationResponse(BaseModel):
+    id: str
+    idempotency_key: str
+    candidate_id: str
+    watch_id: Optional[str] = None
+    observation_type: str
+    mode: str
+    price: float
+    quantity: float
+    remaining_quantity: Optional[float] = None
+    fees_paid: float
+    actual_time_ms: int
+    receipt_time_ms: int
+    is_off_plan: bool
+    is_risk_breach: bool
+    reconciled_sl_breach: bool
+    exit_reason: Optional[str] = None
+    realized_pnl_usdt: Optional[float] = None
+    notes: Optional[str] = None
+    created_at: str
+
+
+class CandidatePlanResponse(BaseModel):
+    id: str
+    watch_id: Optional[str] = None
+    strategy_version: str
+    rule_config_hash: str
+    decision_time_ms: int
+    available_cutoff_ms: int
+    entry_zone: Dict[str, Any]
+    confirmation: Dict[str, Any]
+    invalidation: Dict[str, Any]
+    stop_price: float
+    target_price: float
+    wait_expires_at_ms: int
+    horizon_ms: int
+    probability: Optional[Dict[str, Any]] = None
+    reasons: List[str]
+    candidate_state: str
+    observations: List[TradeObservationResponse] = []
+    created_at: str

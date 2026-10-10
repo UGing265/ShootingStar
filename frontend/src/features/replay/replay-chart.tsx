@@ -3,6 +3,14 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { CandleDTO } from '../data/types';
 
+export interface StrategyLevelsProps {
+  entryPrice?: number | null;
+  targetPrice?: number | null; // TP
+  stopPrice?: number | null;   // SL
+  zoneLow?: number | null;
+  zoneHigh?: number | null;
+}
+
 export interface ReplayChartProps {
   candles: CandleDTO[];
   phase: 'selection' | 'analysis' | 'result';
@@ -12,6 +20,7 @@ export interface ReplayChartProps {
   targetPrice?: number | null;
   targetCandleCloseMs?: number | null;
   evidenceTimes?: number[];
+  strategyLevels?: StrategyLevelsProps | null;
   onSelect?: (candle: CandleDTO) => void;
   showAll?: boolean;
   timeframe?: string;
@@ -46,12 +55,14 @@ export function ReplayChart({
   targetPrice = null,
   targetCandleCloseMs = null,
   evidenceTimes = [],
+  strategyLevels = null,
   onSelect,
   showAll = false,
   timeframe = '1m',
   height = 360,
 }: ReplayChartProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
 
   // In analysis phase: strictly filter out any candle beyond buyTimeMs to prevent lookahead leakage
   const effectiveCandles = useMemo(() => {
@@ -153,6 +164,26 @@ export function ReplayChart({
     if (targetPrice && targetPrice > 0) {
       minP = Math.min(minP, targetPrice * 0.998);
       maxP = Math.max(maxP, targetPrice * 1.002);
+    }
+    if (strategyLevels) {
+      if (strategyLevels.targetPrice && strategyLevels.targetPrice > 0) {
+        minP = Math.min(minP, strategyLevels.targetPrice * 0.998);
+        maxP = Math.max(maxP, strategyLevels.targetPrice * 1.002);
+      }
+      if (strategyLevels.stopPrice && strategyLevels.stopPrice > 0) {
+        minP = Math.min(minP, strategyLevels.stopPrice * 0.998);
+        maxP = Math.max(maxP, strategyLevels.stopPrice * 1.002);
+      }
+      if (strategyLevels.entryPrice && strategyLevels.entryPrice > 0) {
+        minP = Math.min(minP, strategyLevels.entryPrice * 0.998);
+        maxP = Math.max(maxP, strategyLevels.entryPrice * 1.002);
+      }
+      if (strategyLevels.zoneLow && strategyLevels.zoneLow > 0) {
+        minP = Math.min(minP, strategyLevels.zoneLow * 0.998);
+      }
+      if (strategyLevels.zoneHigh && strategyLevels.zoneHigh > 0) {
+        maxP = Math.max(maxP, strategyLevels.zoneHigh * 1.002);
+      }
     }
 
     const priceSpan = Math.max(maxP - minP, 1);
@@ -430,7 +461,75 @@ export function ReplayChart({
       ctx.textAlign = 'right';
       ctx.fillText(`Kết quả: $${targetPrice.toLocaleString()} (${isProfitable ? '▲ UP' : isLoss ? '▼ DOWN' : 'FLAT'})`, w - padR - 8, resultY - 6);
     }
-  }, [visibleCandles, effectiveCandles.length, buyPrice, buyTimeMs, targetTimeMs, targetPrice, targetCandleCloseMs, evidenceTimes, phase]);
+
+    // 9. Strategy Barrier Overlays (Vùng mua, Chốt lời TP, Cắt lỗ SL)
+    if (strategyLevels) {
+      // 9a. Entry Zone Band
+      if (strategyLevels.zoneLow && strategyLevels.zoneHigh && strategyLevels.zoneHigh > strategyLevels.zoneLow) {
+        const zoneTopY = padT + ((maxP - strategyLevels.zoneHigh) / priceSpan) * plotH;
+        const zoneBottomY = padT + ((maxP - strategyLevels.zoneLow) / priceSpan) * plotH;
+        ctx.fillStyle = 'rgba(2, 132, 199, 0.08)';
+        ctx.fillRect(padL, zoneTopY, plotW, zoneBottomY - zoneTopY);
+      }
+
+      // 9b. Proposed Entry Line
+      if (strategyLevels.entryPrice && strategyLevels.entryPrice > 0) {
+        const entryY = padT + ((maxP - strategyLevels.entryPrice) / priceSpan) * plotH;
+        ctx.save();
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(padL, entryY);
+        ctx.lineTo(w - padR, entryY);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.fillStyle = '#0284c7';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`Vùng mua đề xuất: $${strategyLevels.entryPrice.toLocaleString()}`, padL + 8, entryY - 4);
+      }
+
+      // 9c. Take Profit (TP) Line
+      if (strategyLevels.targetPrice && strategyLevels.targetPrice > 0) {
+        const tpY = padT + ((maxP - strategyLevels.targetPrice) / priceSpan) * plotH;
+        ctx.save();
+        ctx.setLineDash([6, 3]);
+        ctx.strokeStyle = '#16a34a';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(padL, tpY);
+        ctx.lineTo(w - padR, tpY);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.fillStyle = '#16a34a';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`Chốt lời (TP): $${strategyLevels.targetPrice.toLocaleString()}`, padL + 8, tpY - 5);
+      }
+
+      // 9d. Stop Loss (SL) Line
+      if (strategyLevels.stopPrice && strategyLevels.stopPrice > 0) {
+        const slY = padT + ((maxP - strategyLevels.stopPrice) / priceSpan) * plotH;
+        ctx.save();
+        ctx.setLineDash([6, 3]);
+        ctx.strokeStyle = '#dc2626';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(padL, slY);
+        ctx.lineTo(w - padR, slY);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.fillStyle = '#dc2626';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`Cắt lỗ (SL): $${strategyLevels.stopPrice.toLocaleString()}`, padL + 8, slY + 12);
+      }
+    }
+  }, [visibleCandles, effectiveCandles.length, buyPrice, buyTimeMs, targetTimeMs, targetPrice, targetCandleCloseMs, evidenceTimes, strategyLevels, phase]);
 
   useEffect(() => {
     drawChart();

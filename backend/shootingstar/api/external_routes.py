@@ -139,7 +139,14 @@ def _execute_job_in_background(job_id: str, is_mock: bool) -> None:
                 job = job_repo.get_by_id(job_id)
                 if job:
                     job.status = AnalysisStatus.FAILED.value
-                    job.error_message = f"Lỗi thực thi nền: {e}"
+                    err_str = str(e)
+                    if "503" in err_str or "Service Unavailable" in err_str:
+                        user_msg = "Máy chủ Google Gemini tạm thời quá tải (HTTP 503 Service Unavailable). Đã thử xoay vòng key nhưng chưa thành công, vui lòng thử lại sau giây lát."
+                    elif "429" in err_str or "quota" in err_str.lower():
+                        user_msg = "Hạn mức API Gemini chạm ngưỡng (HTTP 429 Rate Limit/Quota). Tất cả key đang trong thời gian hạ nhiệt (cooldown), vui lòng chờ."
+                    else:
+                        user_msg = f"Lỗi thực thi nền: {e}"
+                    job.error_message = user_msg
                     job_repo.save(job)
                     session.commit()
         except Exception:

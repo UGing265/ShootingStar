@@ -5,7 +5,8 @@ import { CandleDTO, SnapshotSummary } from '../data/types';
 import { SimulationJobResponse } from './types';
 import { ExternalAnalysisJobDTO, ExternalAnalysisStatus, ExternalContextVariant } from './external-types';
 import { ReplayChart } from './replay-chart';
-
+import { cleanSectionContent, formatCanonicalFeatureTable } from './report-format';
+import ReactMarkdown from 'react-markdown';
 function formatUtc7(ms: number): string {
   if (!ms || isNaN(ms)) return 'N/A';
   const d = new Date(ms + 7 * 3600 * 1000);
@@ -74,6 +75,7 @@ export function ReplayPlayer({
   const [isVoting, setIsVoting] = useState<boolean>(false);
   const [isRevealing, setIsRevealing] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [simError, setSimError] = useState<string | null>(null);
 
 
   // Causal 6-hour history check
@@ -212,6 +214,45 @@ export function ReplayPlayer({
       }
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : 'Lỗi kết nối khi gửi yêu cầu phân tích.');
+    } finally {
+      setIsLoadingJob(false);
+    }
+  };
+
+  const handleRunSimulationAtCurrentPoint = async () => {
+    const currentPrice = externalJob ? externalJob.purchase_price_p : parseFloat(buyPriceInput);
+    const currentTime = externalJob ? externalJob.prediction_time_t_ms : buyTimeMs;
+    if (!currentPrice || !currentTime) return;
+
+    setIsLoadingJob(true);
+    setErrorMsg(null);
+    setSimError(null);
+    try {
+      const res = await fetch('/api/replay/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          snapshot_id: externalJob?.snapshot_id || selectedSnapshotId,
+          buy_time_ms: currentTime,
+          buy_price: currentPrice,
+          horizon_minutes: 30,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        const msg = data.error || data.detail || `Không thể tạo tác vụ mô phỏng (HTTP ${res.status}).`;
+        setErrorMsg(msg);
+        setSimError(msg);
+        return;
+      }
+
+      setSimulationJob(data);
+      setActiveTab('step2');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Lỗi kết nối khi chạy mô phỏng.';
+      setErrorMsg(msg);
+      setSimError(msg);
     } finally {
       setIsLoadingJob(false);
     }
@@ -551,14 +592,14 @@ export function ReplayPlayer({
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span>⚙️</span>
-                    <span>Mô hình Cục bộ (Point-Price Pipeline)</span>
-                    <span style={{ fontSize: 10, background: '#fee2e2', color: '#991b1b', padding: '1px 6px', borderRadius: 4 }}>
-                      Gated
+                    <span>🎯</span>
+                    <span>Mô phỏng Chiến thuật 30m</span>
+                    <span style={{ fontSize: 10, background: '#dcfce7', color: '#166534', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>
+                      Vùng mua + TP/SL
                     </span>
                   </div>
                   <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
-                    Đang ở trạng thái an toàn: từ chối ngoại suy xác suất khi chưa có model OOS.
+                    Đo lường nến quá khứ, tính toán điểm vào đề xuất, dải Vùng mua, mức Chốt lời (TP) và Cắt lỗ (SL).
                   </div>
                 </button>
               </div>
@@ -781,7 +822,7 @@ export function ReplayPlayer({
                 ? '⏳ Đang trích xuất 6h Causal & Phân tích...'
                 : engineType === 'external'
                 ? '▶️ Phân tích với Gemini (Step 2)'
-                : '▶️ Chạy tác vụ Mô phỏng Cục bộ (Step 2)'}
+                : '▶️ Chạy Mô phỏng Chiến thuật 30m (Vùng mua, TP, SL)'}
             </button>
           </div>
         </div>
@@ -855,6 +896,13 @@ export function ReplayPlayer({
               buyPrice={externalJob ? externalJob.purchase_price_p : (simulationJob?.buy_price || parseFloat(buyPriceInput) || 0)}
               targetTimeMs={(externalJob ? externalJob.prediction_time_t_ms : (simulationJob?.buy_time_ms || buyTimeMs)) + (externalJob ? externalJob.horizon_minutes : simulationJob?.horizon_minutes || 30) * 60 * 1000}
               evidenceTimes={externalJob?.ai_prediction?.evidence_candle_times || []}
+              strategyLevels={simulationJob?.strategy_evaluation ? {
+                entryPrice: simulationJob.strategy_evaluation.proposed_entry,
+                targetPrice: simulationJob.strategy_evaluation.target_price,
+                stopPrice: simulationJob.strategy_evaluation.stop_price,
+                zoneLow: simulationJob.strategy_evaluation.zone_low,
+                zoneHigh: simulationJob.strategy_evaluation.zone_high,
+              } : null}
             />
             <p style={{ margin: '6px 0 0 0', fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
               💡 Nến tương lai sau mốc mua (t) bị che hoàn toàn để đảm bảo tính khách quan không nhìn trước.
@@ -929,7 +977,54 @@ export function ReplayPlayer({
               {/* Interruption / Incomplete / Insufficient History Banners */}
               {externalJob.status === 'FAILED_INTERRUPTED' && (
                 <div style={{ padding: '14px 16px', borderRadius: 6, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', marginBottom: 16, fontSize: 13 }}>
-                  <strong>🛑 Tiến trình bị gián đoạn:</strong> {externalJob.error_message || 'Server khởi động lại trong khi đang chạy; không tự động gọi lại API để tránh chi phí ngoài ý muốn.'}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                    <div>
+                      <strong>🛑 Tiến trình bị gián đoạn:</strong> {externalJob.error_message || 'Server khởi động lại trong khi đang chạy; không tự động gọi lại API để tránh chi phí ngoài ý muốn.'}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRunAIJob()}
+                      disabled={isLoadingJob}
+                      style={{
+                        padding: '6px 14px',
+                        background: '#dc2626',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 4,
+                        cursor: isLoadingJob ? 'not-allowed' : 'pointer',
+                        fontSize: 12,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {isLoadingJob ? 'Đang khởi chạy...' : '🔄 Thử lại phân tích'}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {externalJob.status === 'FAILED' && (
+                <div style={{ padding: '14px 16px', borderRadius: 6, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', marginBottom: 16, fontSize: 13 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                    <div>
+                      <strong>✕ Phân tích thất bại:</strong> {externalJob.error_message || 'Đã xảy ra lỗi trong quá trình thực thi nền.'}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRunAIJob()}
+                      disabled={isLoadingJob}
+                      style={{
+                        padding: '6px 14px',
+                        background: '#dc2626',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 4,
+                        cursor: isLoadingJob ? 'not-allowed' : 'pointer',
+                        fontSize: 12,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {isLoadingJob ? 'Đang khởi chạy...' : '🔄 Thử lại phân tích'}
+                    </button>
+                  </div>
                 </div>
               )}
               {externalJob.status === 'RESEARCH_INCOMPLETE' && (
@@ -942,8 +1037,9 @@ export function ReplayPlayer({
                   <strong>ℹ️ Thiếu dữ liệu lịch sử:</strong> Cần tối thiểu 6 giờ nến liên tục trước mốc mua để xây dựng cửa sổ nhân quả.
                 </div>
               )}
-
               {/* Prediction Direction Box */}
+              {externalJob.status !== 'FAILED' && externalJob.status !== 'FAILED_INTERRUPTED' && (
+                <>
               <div
                 style={{
                   padding: '18px',
@@ -1233,26 +1329,86 @@ export function ReplayPlayer({
                     📑 Báo cáo phân tích chuyên sâu đầy đủ (7 phần tiếng Việt):
                   </h3>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    {[
-                      { title: '1. Câu hỏi và dữ liệu', content: externalJob.evidence_envelope.report_sections.cau_hoi_va_du_lieu },
-                      { title: '2. Diễn biến quan sát', content: externalJob.evidence_envelope.report_sections.dien_bien_quan_sat },
-                      { title: '3. Giả thuyết và mẫu được kiểm', content: externalJob.evidence_envelope.report_sections.gia_thuyet_va_mau_duoc_kiem },
-                      { title: '4. Tài liệu đã tra cứu', content: externalJob.evidence_envelope.report_sections.tai_lieu_da_tra },
-                      { title: '5. Lập luận và phản biện', content: externalJob.evidence_envelope.report_sections.lap_luan_va_phan_bien },
-                      { title: '6. Kết luận có điều kiện', content: externalJob.evidence_envelope.report_sections.ket_luan_co_dieu_kien },
-                      { title: '7. Giới hạn và khả năng áp dụng', content: externalJob.evidence_envelope.report_sections.gioi_han_va_kha_nang_ap_dung },
-                    ].map((sec, sIdx) => sec.content ? (
-                      <div key={sIdx} style={{ padding: '12px', borderRadius: 6, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                        <h4 style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', margin: '0 0 6px 0' }}>
-                          {sec.title}
-                        </h4>
-                        <p style={{ margin: 0, fontSize: 13, color: '#334155', lineHeight: 1.6, whiteSpace: 'pre-line' }}>
-                          {sec.content}
-                        </p>
-                      </div>
-                    ) : null)}
+                    {(() => {
+                      const feedFeatures = (externalJob.evidence_envelope?.feed as any)?.features as Array<{ feature_id: string; value: number }> | undefined;
+                      const canonicalRows = formatCanonicalFeatureTable(feedFeatures);
+
+                      return [
+                        { title: '1. Câu hỏi và dữ liệu', content: externalJob.evidence_envelope.report_sections.cau_hoi_va_du_lieu, isSection1: true },
+                        { title: '2. Diễn biến quan sát', content: externalJob.evidence_envelope.report_sections.dien_bien_quan_sat, isSection1: false },
+                        { title: '3. Giả thuyết và mẫu được kiểm', content: externalJob.evidence_envelope.report_sections.gia_thuyet_va_mau_duoc_kiem, isSection1: false },
+                        { title: '4. Tài liệu đã tra cứu', content: externalJob.evidence_envelope.report_sections.tai_lieu_da_tra, isSection1: false },
+                        { title: '5. Lập luận và phản biện', content: externalJob.evidence_envelope.report_sections.lap_luan_va_phan_bien, isSection1: false },
+                        { title: '6. Kết luận có điều kiện', content: externalJob.evidence_envelope.report_sections.ket_luan_co_dieu_kien, isSection1: false },
+                        { title: '7. Giới hạn và khả năng áp dụng', content: externalJob.evidence_envelope.report_sections.gioi_han_va_kha_nang_ap_dung, isSection1: false },
+                      ].map((sec, sIdx) => {
+                        if (!sec.content) return null;
+
+                        if (sec.isSection1 && canonicalRows.length > 0) {
+                          return (
+                            <div key={sIdx} style={{ padding: '14px', borderRadius: 6, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                              <h4 style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', margin: '0 0 8px 0' }}>
+                                {sec.title}
+                              </h4>
+                              <p style={{ margin: '0 0 10px 0', fontSize: 12, color: '#475569', lineHeight: 1.5 }}>
+                                Đánh giá xu hướng <strong>{externalJob.symbol}</strong> ({externalJob.timeframe}) trong chân trời <strong>{externalJob.horizon_minutes} phút</strong> tới.
+                                Mốc cutoff: <strong>{formatUtc7(externalJob.prediction_time_t_ms)}</strong>. Giá mua tham chiếu: <strong>${externalJob.purchase_price_p.toLocaleString()} USDT</strong>.
+                              </p>
+                              <div style={{ overflowX: 'auto', marginBottom: 10 }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, background: '#ffffff', borderRadius: 4, border: '1px solid #e2e8f0' }}>
+                                  <thead>
+                                    <tr style={{ background: '#f1f5f9', borderBottom: '1px solid #cbd5e1', textAlign: 'left' }}>
+                                      <th style={{ padding: '6px 10px', color: '#475569', fontWeight: 600 }}>Chỉ số kỹ thuật</th>
+                                      <th style={{ padding: '6px 10px', color: '#0f172a', fontWeight: 700 }}>Giá trị chuẩn hoá</th>
+                                      <th style={{ padding: '6px 10px', color: '#64748b', fontWeight: 500 }}>Ý nghĩa / Đơn vị</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {canonicalRows.map((r, rIdx) => (
+                                      <tr key={rIdx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                        <td style={{ padding: '6px 10px', color: '#334155' }}>{r.label}</td>
+                                        <td style={{ padding: '6px 10px', fontWeight: 600, color: '#0f172a' }}>{r.valueStr}</td>
+                                        <td style={{ padding: '6px 10px', color: '#64748b', fontSize: 11 }}>{r.unitMeaning}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <details style={{ fontSize: 11, color: '#64748b' }}>
+                                <summary style={{ cursor: 'pointer', fontWeight: 600 }}>🔍 Xem văn bản AI gốc (Provenance Raw)</summary>
+                                <p style={{ margin: '6px 0 0 0', padding: '8px', background: '#f1f5f9', borderRadius: 4, whiteSpace: 'pre-line', lineHeight: 1.5, color: '#475569' }}>
+                                  {sec.content}
+                                </p>
+                              </details>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div key={sIdx} style={{ padding: '12px', borderRadius: 6, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                            <h4 style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', margin: '0 0 6px 0' }}>
+                              {sec.title}
+                            </h4>
+                            <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.6 }}>
+                              <ReactMarkdown
+                                components={{
+                                  p: ({ children }) => <p style={{ margin: '0 0 8px 0', lineHeight: 1.6 }}>{children}</p>,
+                                  ul: ({ children }) => <ul style={{ margin: '0 0 8px 0', paddingLeft: 20 }}>{children}</ul>,
+                                  li: ({ children }) => <li style={{ marginBottom: 4 }}>{children}</li>,
+                                  strong: ({ children }) => <strong style={{ fontWeight: 600, color: '#0f172a' }}>{children}</strong>,
+                                }}
+                              >
+                                {cleanSectionContent(sec.content, sec.title)}
+                              </ReactMarkdown>
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
+              )}
+                </>
               )}
             </div>
           )}
@@ -1291,6 +1447,186 @@ export function ReplayPlayer({
                   <div style={{ fontSize: 16, fontWeight: 700 }}>
                     {simulationJob.ai_prediction?.predicted_direction}
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 30m Fast-Entry Strategy Evaluation Card */}
+          {simulationJob?.strategy_evaluation && (() => {
+            const evalData = simulationJob.strategy_evaluation;
+            const pEntry = evalData.proposed_entry;
+            const tp = evalData.target_price;
+            const sl = evalData.stop_price;
+            const tpPct = pEntry && tp ? ((tp - pEntry) / pEntry) * 100 : null;
+            const slPct = pEntry && sl ? ((sl - pEntry) / pEntry) * 100 : null;
+
+            return (
+              <div
+                style={{
+                  padding: '16px',
+                  borderRadius: 8,
+                  border: '1px solid #cbd5e1',
+                  background: '#f8fafc',
+                  marginBottom: 18,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>
+                    🎯 Đánh giá Chiến thuật 30m Fast-Entry ({evalData.strategy_version})
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      padding: '3px 10px',
+                      borderRadius: 4,
+                      background: evalData.candidate_state === 'CONFIRMED' ? '#dcfce7' : evalData.candidate_state === 'WAIT_CONFIRMATION' ? '#fef3c7' : '#f1f5f9',
+                      color: evalData.candidate_state === 'CONFIRMED' ? '#166534' : evalData.candidate_state === 'WAIT_CONFIRMATION' ? '#92400e' : '#475569',
+                    }}
+                  >
+                    {evalData.candidate_state === 'CONFIRMED' ? '✓ XÁC NHẬN VÀO LỆNH' : evalData.candidate_state === 'WAIT_CONFIRMATION' ? '⏳ CHỜ NẾN RECLAIM' : 'KHÔNG CÓ SETUP (NO_SETUP)'}
+                  </span>
+                </div>
+
+                {pEntry ? (
+                  <>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, fontSize: 12, marginBottom: 12, padding: '10px 12px', background: '#ffffff', borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                      <div>
+                        <span style={{ color: '#64748b', display: 'block', fontSize: 11 }}>Vùng mua an toàn:</span>
+                        <strong style={{ color: '#0284c7' }}>
+                          ${pEntry.toLocaleString()}
+                          {evalData.zone_low && evalData.zone_high && (
+                            <span style={{ fontSize: 11, color: '#64748b', display: 'block', fontWeight: 500 }}>
+                              [{evalData.zone_low.toLocaleString()} - {evalData.zone_high.toLocaleString()}]
+                            </span>
+                          )}
+                        </strong>
+                      </div>
+                      <div>
+                        <span style={{ color: '#64748b', display: 'block', fontSize: 11 }}>Chốt lời (TP):</span>
+                        <strong style={{ color: '#16a34a' }}>
+                          ${tp?.toLocaleString()}
+                          {tpPct !== null && <span style={{ fontSize: 11, display: 'block' }}>+{tpPct.toFixed(2)}%</span>}
+                        </strong>
+                      </div>
+                      <div>
+                        <span style={{ color: '#64748b', display: 'block', fontSize: 11 }}>Cắt lỗ (SL):</span>
+                        <strong style={{ color: '#dc2626' }}>
+                          ${sl?.toLocaleString()}
+                          {slPct !== null && <span style={{ fontSize: 11, display: 'block' }}>{slPct.toFixed(2)}%</span>}
+                        </strong>
+                      </div>
+                      <div>
+                        <span style={{ color: '#64748b', display: 'block', fontSize: 11 }}>Tỷ lệ R:R:</span>
+                        <strong style={{ fontSize: 13, color: (evalData.reward_risk_ratio ?? 0) >= 1.5 ? '#166534' : '#92400e' }}>
+                          1 : {evalData.reward_risk_ratio?.toFixed(2)}
+                        </strong>
+                      </div>
+                      {evalData.support_level && (
+                        <div>
+                          <span style={{ color: '#64748b', display: 'block', fontSize: 11 }}>Mốc hỗ trợ:</span>
+                          <strong>${evalData.support_level.toLocaleString()}</strong>
+                        </div>
+                      )}
+                      {evalData.reclaim_level && (
+                        <div>
+                          <span style={{ color: '#64748b', display: 'block', fontSize: 11 }}>Mốc Reclaim:</span>
+                          <strong>${evalData.reclaim_level.toLocaleString()}</strong>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: '#64748b' }}>
+                      <span>
+                        Chi phí giả định: Binance Spot VIP 0 (10 bps/chiều) + 5 bps trượt giá chuẩn.
+                      </span>
+                      <span style={{ fontWeight: 600, color: evalData.is_trade_eligible ? '#16a34a' : '#d97706' }}>
+                        {evalData.is_trade_eligible ? '● Đủ điều kiện khớp lệnh' : '● Chờ kiểm định chi phí (Gated)'}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ padding: '12px 14px', background: '#ffffff', borderRadius: 6, border: '1px solid #fed7aa', borderLeft: '4px solid #f97316' }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: '#9a3412', marginBottom: 4 }}>
+                      ⚠️ Không vào lệnh tại cây nến này (Bỏ qua)
+                    </div>
+                    <p style={{ margin: '0 0 6px 0', fontSize: 12, color: '#475569', lineHeight: 1.5 }}>
+                      Thuật toán kiểm tra các nến trước mốc này và quyết định <strong>KHÔNG VÀO LỆNH</strong>:
+                    </p>
+                    <div style={{ fontSize: 12, color: '#dc2626', background: '#fef2f2', padding: '6px 10px', borderRadius: 4 }}>
+                      <strong>Lý do:</strong>{' '}
+                      {evalData.reasons.includes('NO_TARGET')
+                        ? 'Cây nến này đang ở sát đỉnh (không có đỉnh kháng cự cao hơn để đặt mục tiêu Chốt lời TP) hoặc tỷ lệ Lợi nhuận/Rủi ro (R:R) chưa đạt chuẩn tối thiểu.'
+                        : evalData.reasons.includes('INSUFFICIENT_HISTORY')
+                        ? 'Chưa đủ số lượng nến lịch sử trước đó để tính toán mốc hỗ trợ và kháng cự.'
+                        : evalData.reasons.includes('TICK_COLLAPSE')
+                        ? 'Khoảng cách giá quá hẹp, mức cắt lỗ nằm sát giá vào lệnh.'
+                        : evalData.reasons.includes('RISK_EXCEEDED')
+                        ? 'Rủi ro cắt lỗ vượt quá ngưỡng an toàn cho phép.'
+                        : evalData.reasons.length > 0
+                        ? evalData.reasons.join(', ')
+                        : 'Không thỏa mãn điều kiện an toàn.'}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* 30m Fast-Entry Strategy Transition Card */}
+          {!simulationJob?.strategy_evaluation && externalJob && (
+            <div
+              style={{
+                padding: '16px',
+                borderRadius: 8,
+                border: '1px solid #93c5fd',
+                background: '#eff6ff',
+                marginBottom: 18,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#1e40af' }}>
+                  🎯 Muốn xem Vùng mua, Chốt lời (TP) và Cắt lỗ (SL) tại điểm này?
+                </span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    padding: '3px 8px',
+                    borderRadius: 4,
+                    background: '#dbeafe',
+                    color: '#1e40af',
+                  }}
+                >
+                  Chiến thuật 30m Fast-Entry
+                </span>
+              </div>
+              <p style={{ margin: '0 0 12px 0', fontSize: 12, color: '#334155', lineHeight: 1.5 }}>
+                Báo cáo Gemini phía trên chỉ nghiên cứu mẫu hình nến và tài liệu. Để hệ thống thuật toán tính toán chính xác <strong>Điểm vào đề xuất, dải Vùng mua, mức Chốt lời (TP) và Cắt lỗ (SL)</strong> và vẽ trực tiếp lên biểu đồ, bạn chỉ cần bấm nút bên dưới:
+              </p>
+              <button
+                type="button"
+                onClick={handleRunSimulationAtCurrentPoint}
+                disabled={isLoadingJob}
+                style={{
+                  padding: '9px 18px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  background: '#2563eb',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: isLoadingJob ? 'not-allowed' : 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                {isLoadingJob ? '⏳ Đang tính toán chiến thuật...' : '▶️ Chạy Mô phỏng Vùng mua & TP/SL tại nến này'}
+              </button>
+              {simError && (
+                <div style={{ marginTop: 10, padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, color: '#dc2626', fontSize: 12 }}>
+                  ⚠️ {simError}
                 </div>
               )}
             </div>
@@ -1693,6 +2029,59 @@ export function ReplayPlayer({
                       </strong>
                     </div>
                   </div>
+                  {simulationJob?.strategy_outcome && (() => {
+                    const stratOutcome = simulationJob.strategy_outcome;
+                    return (
+                      <div
+                        style={{
+                          marginTop: 16,
+                          padding: '14px',
+                          borderRadius: 6,
+                          background: '#ffffff',
+                          border: '1px solid #cbd5e1',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>
+                            KẾT QUẢ RÀO CHẮN CHIẾN THUẬT (BARRIER OUTCOME)
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 11,
+                              fontWeight: 700,
+                              padding: '2px 8px',
+                              borderRadius: 4,
+                              background: stratOutcome.outcome === 'TP_FIRST' ? '#dcfce7' : stratOutcome.outcome === 'SL_FIRST' ? '#fee2e2' : '#f1f5f9',
+                              color: stratOutcome.outcome === 'TP_FIRST' ? '#166534' : stratOutcome.outcome === 'SL_FIRST' ? '#991b1b' : '#334155',
+                            }}
+                          >
+                            {stratOutcome.outcome === 'TP_FIRST' ? 'CHẠM TP TRƯỚC' : stratOutcome.outcome === 'SL_FIRST' ? 'CHẠM SL TRƯỚC' : stratOutcome.outcome === 'TIMEOUT' ? 'TIMEOUT (30M)' : stratOutcome.outcome === 'AMBIGUOUS' ? 'NẾN LƯỠNG LỰ (AMBIGUOUS)' : 'KHÔNG VÀO LỆNH (NO_TRADE)'}
+                          </span>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, fontSize: 12 }}>
+                          <div>
+                            <span style={{ color: '#64748b', display: 'block' }}>Khớp lệnh thực tế:</span>
+                            <strong>{stratOutcome.trade_executed ? 'ĐÃ KHỚP' : 'KHÔNG KHỚP'}</strong>
+                          </div>
+                          <div>
+                            <span style={{ color: '#64748b', display: 'block' }}>Giá đóng vị thế:</span>
+                            <strong>{stratOutcome.exit_price ? `$${stratOutcome.exit_price.toLocaleString()}` : '—'}</strong>
+                          </div>
+                          <div>
+                            <span style={{ color: '#64748b', display: 'block' }}>P&L sau phí (VIP 0 + Trượt):</span>
+                            <strong style={{ color: (stratOutcome.net_return_pct ?? 0) > 0 ? '#16a34a' : (stratOutcome.net_return_pct ?? 0) < 0 ? '#dc2626' : '#475569' }}>
+                              {stratOutcome.net_return_pct != null ? `${stratOutcome.net_return_pct > 0 ? '+' : ''}${stratOutcome.net_return_pct.toFixed(2)}%` : 'Gated'}
+                            </strong>
+                          </div>
+                        </div>
+                        {(stratOutcome.note || stratOutcome.reason) && (
+                          <p style={{ margin: '8px 0 0 0', fontSize: 11, color: '#64748b', fontStyle: 'italic' }}>
+                            💡 {stratOutcome.note || stratOutcome.reason}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
               {/* Realized Chart Outcome & Comparison */}
@@ -1714,6 +2103,13 @@ export function ReplayPlayer({
                   targetPrice={externalJob ? externalJob.target_price : (simulationJob?.outcome?.future_price || null)}
                   targetCandleCloseMs={(externalJob ? externalJob.prediction_time_t_ms : (simulationJob?.buy_time_ms || buyTimeMs)) + (externalJob ? externalJob.horizon_minutes : simulationJob?.horizon_minutes || 30) * 60 * 1000}
                   showAll={true}
+                  strategyLevels={simulationJob?.strategy_evaluation ? {
+                    entryPrice: simulationJob.strategy_evaluation.proposed_entry,
+                    targetPrice: simulationJob.strategy_evaluation.target_price,
+                    stopPrice: simulationJob.strategy_evaluation.stop_price,
+                    zoneLow: simulationJob.strategy_evaluation.zone_low,
+                    zoneHigh: simulationJob.strategy_evaluation.zone_high,
+                  } : null}
                 />
               </div>
             </div>

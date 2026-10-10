@@ -7,7 +7,9 @@ from alembic import command
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from shootingstar.adapters.db.session import get_database_url
+from shootingstar.adapters.db.session import get_database_url, load_env_file
+
+load_env_file(override=True)
 
 
 @pytest.fixture(scope="session", autouse=True)
