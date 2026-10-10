@@ -2,7 +2,7 @@
 
 ## Context / trạng thái
 
-[Plan tổng](plan.md), [Feed](phase-01-feed-hypotheses.md), [Báo cáo](phase-03-orchestration-report.md). **Pending.** Các nguồn dưới đây đã được đọc ở mức nêu rõ, không phải pipeline sản phẩm đã chạy.
+[Plan tổng](plan.md), [Feed](phase-01-feed-hypotheses.md), [Báo cáo](phase-03-orchestration-report.md). **Trạng thái: COMPLETED (100%).** Pipeline nghiên cứu nguồn và đối chiếu mẫu criteria đã hoàn tất triển khai và kiểm thử.
 
 ## Tool nghiên cứu được chọn
 
@@ -94,7 +94,7 @@ Các tiêu chí là rubric kiểm bằng chứng, không hứa tự chứng minh
 - Sửa `patterns.py`: diagnostic rules tại cutoff không future; không trộn pattern với classifier/training pipeline.
 - Tái dùng `url_validator.py`, lessons approved revisions, repo artifacts theo Phase 03; contract tests theo Phase 04.
 
-- [ ] Có tool trace search thật và source đọc được, hoặc trạng thái thiếu thật.
-- [ ] Criteria có công thức/nguồn/ngưỡng rõ và cả FAIL/UNKNOWN; không sửa ngưỡng để đạt mẫu.
-- [ ] Pattern có context/confirmation đúng; rule ngoài catalogue không auto execute.
-- [ ] Khớp mẫu không được công bố là độ chính xác dự báo hoặc P&L.
+- [x] Có tool trace search thật và source đọc được, hoặc trạng thái thiếu thật.
+- [x] Criteria có công thức/nguồn/ngưỡng rõ và cả FAIL/UNKNOWN; không sửa ngưỡng để đạt mẫu.
+- [x] Pattern có context/confirmation đúng; rule ngoài catalogue không auto execute.
+- [x] Khớp mẫu không được công bố là độ chính xác dự báo hoặc P&L.

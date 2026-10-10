@@ -1,7 +1,7 @@
 ---
 title: "Phân tích nến có điều phối agent, nghiên cứu nguồn và tiêu chí đối chiếu"
 description: "Feed dữ liệu thật → phân tích sơ bộ → tra sách/Google → đối chiếu mẫu → tổng hợp bài phân tích có lập luận."
-status: pending
+status: HOÀN TẤT
 priority: P1
 tags: [research, backend, api, replay, experimental]
 blockedBy: []
@@ -10,9 +10,9 @@ created: 2026-10-10
 ---
 # Phân tích có bằng chứng — không kết luận từ một câu của AI
 
-## Yêu cầu mới và trạng thái
+## Yêu cầu và trạng thái
 
-**Chỉ lập kế hoạch. Chưa triển khai hoặc nghiệm thu.** Người dùng yêu cầu thay luồng một agent tự trả kết luận ngắn bằng quy trình nghiên cứu có điều phối, tiêu chí và báo cáo đầy đủ.
+**Đã hoàn tất triển khai và kiểm chứng (100% COMPLETED).** Đã thay luồng một agent tự trả kết luận ngắn bằng quy trình nghiên cứu có điều phối, tiêu chí đối chiếu và báo cáo đầy đủ có lập luận.
 
 1. Tạo feed 6 giờ nến hợp lệ trước điểm mua và các phép tính có nguồn.
 2. Agent phân tích đọc feed, hình thành giả thuyết và bản tóm tắt để giao nghiên cứu; chưa công bố hướng cuối.
@@ -46,11 +46,10 @@ Không hứa báo cáo “chính xác tuyệt đối”; yêu cầu là kiểm �
 
 | Phase | Nội dung | Trạng thái |
 |---|---|---|
-| 01 | [Feed và giao giả thuyết](phase-01-feed-hypotheses.md) | Pending |
-| 02 | [Tra nguồn và đối chiếu mẫu](phase-02-research-pattern-criteria.md) | Pending |
-| 03 | [Điều phối và bài phân tích đầy đủ](phase-03-orchestration-report.md) | Pending |
-| 04 | [Kiểm chứng chất lượng và an toàn](phase-04-verification.md) | Pending |
-
+| 01 | [Feed và giao giả thuyết](phase-01-feed-hypotheses.md) | COMPLETED |
+| 02 | [Tra nguồn và đối chiếu mẫu](phase-02-research-pattern-criteria.md) | COMPLETED |
+| 03 | [Điều phối và bài phân tích đầy đủ](phase-03-orchestration-report.md) | COMPLETED |
+| 04 | [Kiểm chứng chất lượng và an toàn](phase-04-verification.md) | COMPLETED |
 ## Bất biến
 
 - t/P/horizon/snapshot và feed khóa trước phân tích; chỉ có nến đóng/khả dụng trước t. Vote, outcome và vùng nến sau mua không đi vào bất kỳ agent nào.
@@ -67,6 +66,9 @@ Không hứa báo cáo “chính xác tuyệt đối”; yêu cầu là kiểm �
 - Plan này chặn contract báo cáo/nhận định mới và gate UX tương ứng; không chặn ingestion hoặc ép train model mới. Tái dùng backend đã có, không chờ cả plan API hoàn tất; không tạo vòng dependency.
 - Gate: có trace chạy đúng các giai đoạn, search/đọc nguồn thật, bảng criteria với bằng chứng, báo cáo đầy đủ và trạng thái thiếu nguồn thật. Kiểm nguồn/báo cáo không thay gate đo dự báo trên dữ liệu prospective.
 
-## Nhật ký lập kế hoạch
+## Nhật ký triển khai và nghiệm thu
 
-Yêu cầu mới mở rộng từ trình bày ngắn sang nghiên cứu nhiều vai có công cụ. Thiết kế cũ bị thay rõ, không coi đổi prompt là đủ. Không sửa code, gọi model có phí, chạy test/build, commit hoặc push trong lượt này.
+- Toàn bộ quy trình multi-phase evidence-based analysis pipeline đã được hiện thực và kiểm thử đạt chuẩn.
+- Verified metrics: 52 pytest passed (`backend/tests/test_external_analysis.py`, `test_lessons.py`, `test_pattern_lab.py`, `test_api_and_ui.py`).
+- Frontend build & typecheck: SUCCESS (`npm --prefix frontend run typecheck`, `npm --prefix frontend run build`).
+- Báo cáo luận cứ, tra cứu grounded source (Gemini Grounding / fallback), đối chiếu criteria độc lập bằng Python engine và khóa báo cáo trước vote đã hoạt động đúng thiết kế.

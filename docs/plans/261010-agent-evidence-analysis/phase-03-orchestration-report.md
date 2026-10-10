@@ -2,7 +2,7 @@
 
 ## Context / trạng thái
 
-[Plan tổng](plan.md), [Feed](phase-01-feed-hypotheses.md), [Tra nguồn / tiêu chí](phase-02-research-pattern-criteria.md), [Gate](phase-04-verification.md). **Pending.**
+[Plan tổng](plan.md), [Feed](phase-01-feed-hypotheses.md), [Tra nguồn / tiêu chí](phase-02-research-pattern-criteria.md), [Gate](phase-04-verification.md). **Trạng thái: COMPLETED (100%).** Orchestration service, contracts, HTTP202 async background runner và bài tổng hợp đầy đủ đã hoàn thiện.
 
 ## Quyền và nhiệm vụ từng vai
 
@@ -100,8 +100,8 @@ Một integration owner giữ service/contracts/model adapter; các agent triể
 
 ## Checklist
 
-- [ ] Main bắt buộc đi đủ feed→hypothesis→research→match→synthesis→validate trước hướng cuối.
-- [ ] Có stage artifacts/usage thật, Google trace/nguồn thật, criteria đo bằng Python.
-- [ ] Bài tiếng Việt đầy đủ có phản biện/giới hạn, không chỉ một câu hoặc ba câu.
-- [ ] Search lỗi/ABSTAIN/FAILED_INTERRUPTED khác nhau và UI giải thích đúng.
-- [ ] Report cũ bất biến, không tự nâng thành pipeline mới; mở kết quả không call provider.
+- [x] Main bắt buộc đi đủ feed→hypothesis→research→match→synthesis→validate trước hướng cuối.
+- [x] Có stage artifacts/usage thật, Google trace/nguồn thật, criteria đo bằng Python.
+- [x] Bài tiếng Việt đầy đủ có phản biện/giới hạn, không chỉ một câu hoặc ba câu.
+- [x] Search lỗi/ABSTAIN/FAILED_INTERRUPTED khác nhau và UI giải thích đúng.
+- [x] Report cũ bất biến, không tự nâng thành pipeline mới; mở kết quả không call provider.

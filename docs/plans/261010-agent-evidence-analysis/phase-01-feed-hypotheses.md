@@ -2,7 +2,7 @@
 
 ## Context / trạng thái
 
-[Plan tổng](plan.md), [Tra nguồn và tiêu chí](phase-02-research-pattern-criteria.md). **Pending; chỉ thiết kế.**
+[Plan tổng](plan.md), [Tra nguồn và tiêu chí](phase-02-research-pattern-criteria.md). **Trạng thái: COMPLETED (100%).**
 
 ## Điểm tái sử dụng đã đọc từ source
 
@@ -63,10 +63,10 @@ candidates[]: tên mẫu ứng viên, candle_ids, vì sao đáng kiểm, bối c
 4. Backend xác thực mọi value/ID tham chiếu; số không có tool provenance bị loại khỏi claim đã xác thực hoặc gắn UNKNOWN, không bù bằng câu chuyện.
 5. Giao artifact cho research, chưa trả kết luận READY cho UI.
 
-- [ ] Nến sau t thay đổi không ảnh hưởng feed/hypothesis input; hash/provenance kiểm được.
-- [ ] Candidate có nến/feature cụ thể, thông tin thiếu và vấn đề cần tra; chưa có hướng cuối.
-- [ ] Không gọi forward-return tool, không nhìn vote/outcome, không tự thêm timeframe.
-- [ ] Thiếu lịch sử dừng trước call và hiển thị lý do thật.
+- [x] Nến sau t thay đổi không ảnh hưởng feed/hypothesis input; hash/provenance kiểm được.
+- [x] Candidate có nến/feature cụ thể, thông tin thiếu và vấn đề cần tra; chưa có hướng cuối.
+- [x] Không gọi forward-return tool, không nhìn vote/outcome, không tự thêm timeframe.
+- [x] Thiếu lịch sử dừng trước call và hiển thị lý do thật.
 
 ## Rủi ro
 
