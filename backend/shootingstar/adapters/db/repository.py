@@ -2,7 +2,7 @@
 
 import json
 from typing import Any, Dict, List, Optional
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
 from shootingstar.adapters.db.models import (
@@ -25,6 +25,9 @@ from shootingstar.adapters.db.models import (
     LessonModel,
     LessonRevisionModel,
     LessonReviewEventModel,
+    TradeWatchModel,
+    CandidatePlanModel,
+    TradeObservationModel,
 )
 
 
@@ -354,4 +357,107 @@ class LessonRepository:
 
     def list_review_events(self, lesson_id: str) -> List[LessonReviewEventModel]:
         stmt = select(LessonReviewEventModel).where(LessonReviewEventModel.lesson_id == lesson_id).order_by(LessonReviewEventModel.created_at.desc())
+        return list(self.session.scalars(stmt).all())
+
+
+class TradeWatchRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save(self, watch: TradeWatchModel) -> TradeWatchModel:
+        self.session.add(watch)
+        self.session.flush()
+        return watch
+
+    def get_by_id(self, watch_id: str) -> Optional[TradeWatchModel]:
+        return self.session.get(TradeWatchModel, watch_id)
+
+    def find_active_reservation(self, operator_id: str, symbol: str) -> Optional[TradeWatchModel]:
+        """Finds active watch holding exposure OR active watching session for operator and symbol."""
+        stmt = select(TradeWatchModel).where(
+            TradeWatchModel.operator_id == operator_id,
+            TradeWatchModel.symbol == symbol,
+            or_(
+                TradeWatchModel.status == "WATCHING",
+                TradeWatchModel.position_state.in_(["OPEN", "EXIT_REQUIRED"]),
+            ),
+        )
+        return self.session.scalars(stmt).first()
+
+    def acquire_or_renew_lease(
+        self,
+        watch_id: str,
+        worker_id: str,
+        lease_token: str,
+        lease_ttl_ms: int,
+        current_time_ms: int,
+    ) -> bool:
+        """Atomic Compare-And-Swap (CAS) lease update with fencing token."""
+        stmt = (
+            update(TradeWatchModel)
+            .where(
+                TradeWatchModel.id == watch_id,
+                or_(
+                    TradeWatchModel.lease_expires_at_ms.is_(None),
+                    TradeWatchModel.lease_expires_at_ms < current_time_ms,
+                    and_(
+                        TradeWatchModel.lease_owner == worker_id,
+                        TradeWatchModel.lease_token == lease_token,
+                    ),
+                ),
+            )
+            .values(
+                lease_owner=worker_id,
+                lease_token=lease_token,
+                lease_expires_at_ms=current_time_ms + lease_ttl_ms,
+            )
+        )
+        result = self.session.execute(stmt)
+        self.session.flush()
+        return result.rowcount > 0
+
+class CandidatePlanRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save(self, plan: CandidatePlanModel) -> CandidatePlanModel:
+        self.session.add(plan)
+        self.session.flush()
+        return plan
+
+    def get_by_id(self, candidate_id: str) -> Optional[CandidatePlanModel]:
+        return self.session.get(CandidatePlanModel, candidate_id)
+
+    def list_by_watch_id(self, watch_id: str) -> List[CandidatePlanModel]:
+        stmt = (
+            select(CandidatePlanModel)
+            .where(CandidatePlanModel.watch_id == watch_id)
+            .order_by(CandidatePlanModel.created_at.desc())
+        )
+        return list(self.session.scalars(stmt).all())
+
+
+class TradeObservationRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save(self, obs: TradeObservationModel) -> TradeObservationModel:
+        """Saves observation with strict idempotency by idempotency_key."""
+        existing = self.get_by_idempotency_key(obs.idempotency_key)
+        if existing is not None:
+            return existing
+        self.session.add(obs)
+        self.session.flush()
+        return obs
+
+    def get_by_idempotency_key(self, key: str) -> Optional[TradeObservationModel]:
+        stmt = select(TradeObservationModel).where(TradeObservationModel.idempotency_key == key)
+        return self.session.scalars(stmt).first()
+
+    def list_by_candidate_id(self, candidate_id: str) -> List[TradeObservationModel]:
+        stmt = (
+            select(TradeObservationModel)
+            .where(TradeObservationModel.candidate_id == candidate_id)
+            .order_by(TradeObservationModel.actual_time_ms.asc())
+        )
         return list(self.session.scalars(stmt).all())
