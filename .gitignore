@@ -59,5 +59,6 @@ data/raw/
 data/snapshots/
 data/models/
 data/simulations/
+backend/data/
 *.parquet
 *.sqlite

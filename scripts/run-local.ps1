@@ -32,7 +32,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$InitialLocation = Get-Location
 $ProjectRoot = (Resolve-Path "$PSScriptRoot\..").Path
+Set-Location $ProjectRoot
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "     ShootingStar Research Platform - Local Runner       " -ForegroundColor Cyan
@@ -92,15 +94,13 @@ if (-not (Test-Path $FrontendEnvLocal)) {
 # 3. Database Migrations
 if (-not $FrontendOnly -and -not $SkipMigration) {
     Write-Host "`n[3/5] Running database migrations..." -ForegroundColor Yellow
-    Push-Location (Join-Path $ProjectRoot "backend")
-    try {
-        & $VenvPython -m alembic upgrade head
-        Write-Host "  [OK] Database schema is up to date" -ForegroundColor Green
-    } catch {
-        Write-Warning "  Alembic migration warning: $_. Verify database connectivity if using PostgreSQL."
-    } finally {
-        Pop-Location
+    $AlembicIni = Join-Path $ProjectRoot "backend\alembic.ini"
+    & $VenvPython -m alembic -c $AlembicIni upgrade head
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Alembic migration failed with exit code $LASTEXITCODE. Stopping launcher."
+        exit $LASTEXITCODE
     }
+    Write-Host "  [OK] Database schema is up to date" -ForegroundColor Green
 } else {
     Write-Host "`n[3/5] Skipping database migrations." -ForegroundColor DarkGray
 }
@@ -144,8 +144,8 @@ if (-not $FrontendOnly) {
 if (-not $BackendOnly) {
     Write-Host "  Starting Next.js frontend on http://127.0.0.1:$FrontendPort..." -ForegroundColor Cyan
     $fePsi = New-Object System.Diagnostics.ProcessStartInfo
-    $fePsi.FileName = "npm.cmd"
-    $fePsi.Arguments = "run dev -- -p $FrontendPort"
+    $fePsi.FileName = "cmd.exe"
+    $fePsi.Arguments = "/d /s /c npm run dev -- -p $FrontendPort"
     $fePsi.WorkingDirectory = $FrontendDir
     $fePsi.UseShellExecute = $false
     $feProc = [System.Diagnostics.Process]::Start($fePsi)
@@ -178,4 +178,5 @@ try {
     }
 } finally {
     Stop-AllServices
+    Set-Location $InitialLocation
 }
