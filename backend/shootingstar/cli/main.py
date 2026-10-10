@@ -246,7 +246,7 @@ def main(argv=None) -> int:
             return 1
     if args.command == "run-experiment":
         from pathlib import Path
-        from shootingstar.application.experiment import ExperimentRunner
+        from shootingstar.application.training.experiment import ExperimentRunner
 
         snap_arg = Path(args.snapshot)
         if not snap_arg.exists():

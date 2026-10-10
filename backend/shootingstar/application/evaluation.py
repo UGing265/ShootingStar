@@ -15,7 +15,7 @@ from shootingstar.application.baselines import (
     MajorityClassBaseline,
     SimpleMomentumBaseline,
 )
-from shootingstar.application.modeling import CalibratedLogisticRegressionModel
+from shootingstar.application.training.modeling import CalibratedLogisticRegressionModel
 
 
 @dataclass(frozen=True)

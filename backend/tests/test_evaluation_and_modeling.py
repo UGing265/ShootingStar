@@ -126,7 +126,7 @@ def test_evaluation_report_generator_and_cost_gating():
     assert "UNAVAILABLE_PENDING_SLIPPAGE_METHOD" in md
 
 
-def test_experiment_runner_deterministic_reproducibility(tmp_path: Path):
+def test_experiment_runner_deterministic_reproducibility(tmp_path: Path, migrated_test_engine):
     snap_dir = tmp_path / "snapshots"
     models_dir = tmp_path / "models"
     reports_dir = tmp_path / "reports"

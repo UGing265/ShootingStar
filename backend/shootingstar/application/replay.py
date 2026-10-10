@@ -13,7 +13,7 @@ import numpy as np
 
 from shootingstar.adapters.storage import SnapshotStorage
 from shootingstar.application.features import FeatureExtractionService
-from shootingstar.application.modeling import CalibratedLogisticRegressionModel
+from shootingstar.application.training.modeling import CalibratedLogisticRegressionModel
 from shootingstar.domain.exceptions import DomainError
 from shootingstar.domain.models import Candle, Timeframe
 

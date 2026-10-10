@@ -29,9 +29,9 @@ from shootingstar.adapters.db.session import get_db_session
 from shootingstar.adapters.storage import SnapshotStorage
 from shootingstar.application.evaluation import EvaluationReport, EvaluationReportGenerator
 from shootingstar.application.features import FeatureExtractionService
-from shootingstar.application.labels import LabelGenerationService
-from shootingstar.application.modeling import CalibratedLogisticRegressionModel
-from shootingstar.application.splits import RollingWindowSplitter, WalkForwardSplitter
+from shootingstar.application.training.labels import LabelGenerationService
+from shootingstar.application.training.modeling import CalibratedLogisticRegressionModel
+from shootingstar.application.training.splits import RollingWindowSplitter, WalkForwardSplitter
 
 class ExperimentRunner:
     """Coordinates end-to-end research experiment with immutable provenance."""
