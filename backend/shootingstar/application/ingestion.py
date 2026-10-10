@@ -5,7 +5,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
+import uuid
 
+from shootingstar.adapters.db.models import IngestionRunModel, SnapshotModel
+from shootingstar.adapters.db.repository import IngestionRunRepository, SnapshotRepository
+from shootingstar.adapters.db.session import get_db_session
 from shootingstar.adapters.binance import BinanceSpotClient
 from shootingstar.adapters.storage import RawArchiveStorage, SnapshotStorage
 from shootingstar.application.contracts import QualityInspectorService
@@ -242,3 +246,107 @@ class PilotIngestionService:
             symbol=symbol,
             timeframe=tf.value,
         )
+
+def execute_and_persist_ingestion(
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1m",
+    start_time_ms: Optional[int] = None,
+    end_time_ms: Optional[int] = None,
+    days: int = 30,
+) -> Tuple[IngestionResult, str, str]:
+    """Runs ingestion from Binance Spot and transactionally persists IngestionRun and Snapshot."""
+    service = PilotIngestionService()
+    result = service.run_pilot(
+        symbol=symbol,
+        timeframe_str=timeframe,
+        days=days,
+        start_time_ms=start_time_ms,
+        end_time_ms=end_time_ms,
+    )
+    report = result.report
+
+    with get_db_session() as session:
+        run_repo = IngestionRunRepository(session)
+        snap_repo = SnapshotRepository(session)
+
+        run_id = str(uuid.uuid4())
+        db_run = IngestionRunModel(
+            id=run_id,
+            venue="BINANCE",
+            symbol=report.symbol,
+            timeframe=report.timeframe,
+            start_time_ms=report.start_time_ms,
+            end_time_ms=report.end_time_ms,
+            valid_candles_count=report.valid_candles_count,
+            missing_intervals_count=report.missing_intervals_count,
+            duplicate_candles_count=report.duplicate_candles_count,
+            coverage_ratio=report.coverage_ratio,
+            is_pristine=report.is_pristine,
+            raw_files_count=result.raw_files_count,
+        )
+        run_repo.save(db_run)
+
+        db_snap = SnapshotModel(
+            id=result.snapshot_sha256,
+            ingestion_run_id=run_id,
+            venue="BINANCE",
+            symbol=report.symbol,
+            timeframe=report.timeframe,
+            start_time_ms=report.start_time_ms,
+            end_time_ms=report.end_time_ms,
+            candle_count=report.valid_candles_count,
+            file_path=str(result.snapshot_path),
+            sha256=result.snapshot_sha256,
+        )
+        snap_repo.save(db_snap)
+
+    return result, run_id, result.snapshot_sha256
+
+
+def preview_ingestion(
+    symbol: str = "BTCUSDT",
+    timeframe: str = "1m",
+    start_time_ms: int = 0,
+    end_time_ms: int = 0,
+    client: Optional[BinanceSpotClient] = None,
+    sample_limit: int = 50,
+) -> Tuple[List[Candle], int, str]:
+    """Previews an ingestion window without persisting raw bytes, parquet snapshots, or database records.
+
+    Returns:
+        (sample_candles, estimated_total_candles, quality_status)
+    """
+    client = client or BinanceSpotClient()
+    tf = Timeframe(timeframe)
+    duration_ms = tf.duration_ms
+    expected_intervals = max(1, (end_time_ms - start_time_ms + 1) // duration_ms)
+
+    rows, _, _ = client.fetch_klines_with_raw(
+        symbol=symbol,
+        interval=tf.value,
+        start_time_ms=start_time_ms,
+        end_time_ms=end_time_ms,
+        limit=sample_limit,
+    )
+
+    if not rows:
+        return [], expected_intervals, "EMPTY_RESPONSE"
+
+    candles: List[Candle] = []
+    for r in rows:
+        candles.append(
+            BinanceSpotClient.parse_kline_row(
+                row=r,
+                venue="BINANCE",
+                symbol=symbol,
+                timeframe=tf.value,
+            )
+        )
+
+    # Detect sample gaps
+    quality_status = "SAMPLE_OK_FULL_RANGE_UNCHECKED"
+    for i in range(len(candles) - 1):
+        if candles[i + 1].open_time_ms != candles[i].open_time_ms + duration_ms:
+            quality_status = "SAMPLE_GAP_DETECTED"
+            break
+    return candles, expected_intervals, quality_status

@@ -21,6 +21,11 @@ class BinanceBannedError(DomainError):
     pass
 
 
+class BinanceTimeoutError(DomainError):
+    """Raised when Binance Spot REST API request times out."""
+    pass
+
+
 class BinanceSpotClient:
     """HTTP Client for Binance Spot public klines endpoint."""
 
@@ -72,8 +77,16 @@ class BinanceSpotClient:
 
         with httpx.Client(timeout=self.timeout) as client:
             for attempt in range(max_retries):
-                response = client.get(url, params=params)
-
+                try:
+                    response = client.get(url, params=params)
+                except httpx.TimeoutException as exc:
+                    logger.warning("Binance Spot API timeout on attempt %d/%d: %s", attempt + 1, max_retries, exc)
+                    if attempt < max_retries - 1:
+                        time.sleep(1.0)
+                        continue
+                    raise BinanceTimeoutError(
+                        f"Binance Spot API request timed out after {max_retries} attempts."
+                    ) from exc
                 weight_header = response.headers.get("x-mbx-used-weight-1m")
                 if weight_header and weight_header.isdigit():
                     self.last_used_weight_1m = int(weight_header)
