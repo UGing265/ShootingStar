@@ -13,7 +13,8 @@ export interface ApiResult<T> {
 
 export async function fetchFromApi<T>(
   path: string,
-  params?: Record<string, string | number | undefined | null>
+  params?: Record<string, string | number | undefined | null>,
+  customHeaders?: Record<string, string>
 ): Promise<ApiResult<T>> {
   const baseUrl = process.env.SHOOTINGSTAR_API_URL || 'http://127.0.0.1:8000';
   const url = new URL(path.startsWith('/') ? path : `/${path}`, baseUrl);
@@ -31,6 +32,7 @@ export async function fetchFromApi<T>(
       cache: 'no-store',
       headers: {
         'Accept': 'application/json',
+        ...customHeaders,
       },
     });
 
@@ -57,7 +59,8 @@ export async function fetchFromApi<T>(
 
 export async function postToApi<T>(
   path: string,
-  body: unknown
+  body: unknown,
+  customHeaders?: Record<string, string>
 ): Promise<ApiResult<T>> {
   const baseUrl = process.env.SHOOTINGSTAR_API_URL || 'http://127.0.0.1:8000';
   const url = new URL(path.startsWith('/') ? path : `/${path}`, baseUrl);
@@ -69,10 +72,10 @@ export async function postToApi<T>(
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        ...customHeaders,
       },
-      body: JSON.stringify(body),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-
     if (!res.ok) {
       let errorMsg = `API responded with HTTP ${res.status}`;
       try {
