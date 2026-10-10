@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    return NextResponse.json(result.data, { status: 201 });
+    return NextResponse.json(result.data, { status: result.status || 202 });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Yêu cầu không hợp lệ';
     return NextResponse.json({ error: msg }, { status: 400 });

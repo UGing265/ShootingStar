@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { CandleDTO, SnapshotSummary } from '../data/types';
 import { SimulationJobResponse } from './types';
-import { ExternalAnalysisJobDTO, ExternalContextVariant } from './external-types';
+import { ExternalAnalysisJobDTO, ExternalAnalysisStatus, ExternalContextVariant } from './external-types';
+import { ReplayChart } from './replay-chart';
 
 function formatUtc7(ms: number): string {
   if (!ms || isNaN(ms)) return 'N/A';
@@ -65,24 +66,6 @@ export function ReplayPlayer({
   const [manualDateTime, setManualDateTime] = useState<string>(defaultCandle ? formatForDateTimeLocalUtc7(defaultCandle.close_time_ms) : '');
   const [horizonMinutes, setHorizonMinutes] = useState<number>(30);
 
-  // Pan & Zoom state
-  const [visibleCount, setVisibleCount] = useState<number>(100);
-  const [offsetRight, setOffsetRight] = useState<number>(0);
-  const [isDragging, setIsDragging] = useState<boolean>(false);
-  const dragStartXRef = useRef<number>(0);
-  const dragStartOffsetRef = useRef<number>(0);
-  const hasDraggedRef = useRef<boolean>(false);
-
-  const { visibleCandles, startIndex, endIndex } = useMemo(() => {
-    if (candles.length === 0) return { visibleCandles: [], startIndex: 0, endIndex: 0 };
-    const end = Math.max(0, candles.length - offsetRight);
-    const start = Math.max(0, end - visibleCount);
-    return {
-      visibleCandles: candles.slice(start, end),
-      startIndex: start,
-      endIndex: end,
-    };
-  }, [candles, visibleCount, offsetRight]);
 
   // Jobs state: support both external Gemini job and legacy simulation job
   const [externalJob, setExternalJob] = useState<ExternalAnalysisJobDTO | null>(null);
@@ -92,7 +75,6 @@ export function ReplayPlayer({
   const [isRevealing, setIsRevealing] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Causal 6-hour history check
   const { causalCoverageHours, isCausalValid } = useMemo(() => {
@@ -139,8 +121,6 @@ export function ReplayPlayer({
       .then((data: CandleDTO[]) => {
         if (isCancelled) return;
         setCandles(data);
-        setVisibleCount(Math.min(data.length, 100) || 60);
-        setOffsetRight(0);
         if (data.length > 0) {
           // Default pick candle at 75% index to ensure ~6h of history prior to t
           const pickIdx = Math.min(data.length - 1, Math.max(0, Math.floor(data.length * 0.75)));
@@ -163,233 +143,6 @@ export function ReplayPlayer({
     };
   }, [selectedSnapshotId]);
 
-  // Canvas zoom via mouse wheel
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const handleWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      setVisibleCount((prev) => {
-        if (e.deltaY < 0) {
-          return Math.max(15, Math.round(prev * 0.82));
-        } else {
-          return Math.min(candles.length, Math.max(prev + 5, Math.round(prev * 1.22)));
-        }
-      });
-    };
-
-    canvas.addEventListener('wheel', handleWheel, { passive: false });
-    return () => canvas.removeEventListener('wheel', handleWheel);
-  }, [candles.length, activeTab]);
-
-  // Global mouse up
-  useEffect(() => {
-    const handleGlobalMouseUp = () => {
-      setIsDragging(false);
-    };
-    window.addEventListener('mouseup', handleGlobalMouseUp);
-    return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
-  }, []);
-
-  // Draw chart
-  const drawChart = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || visibleCandles.length === 0) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const w = canvas.width;
-    const h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
-
-    const padL = 60;
-    const padR = 40;
-    const padT = 30;
-    const padB = 40;
-    const plotW = w - padL - padR;
-    const plotH = h - padT - padB;
-
-    let minP = Math.min(...visibleCandles.map((c) => c.low));
-    let maxP = Math.max(...visibleCandles.map((c) => c.high));
-
-    const currentBuyPrice = parseFloat(buyPriceInput);
-    if (!isNaN(currentBuyPrice) && currentBuyPrice > 0) {
-      minP = Math.min(minP, currentBuyPrice * 0.998);
-      maxP = Math.max(maxP, currentBuyPrice * 1.002);
-    }
-
-    const priceSpan = Math.max(maxP - minP, 1);
-    const n = visibleCandles.length;
-    const stepX = plotW / Math.max(n, 1);
-    const candleW = Math.max(2, stepX * 0.7);
-
-    // Background grid
-    ctx.strokeStyle = '#f1f5f9';
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 5; i++) {
-      const y = padT + (plotH / 4) * i;
-      ctx.beginPath();
-      ctx.moveTo(padL, y);
-      ctx.lineTo(w - padR, y);
-      ctx.stroke();
-
-      const pVal = maxP - (priceSpan / 4) * i;
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '10px monospace';
-      ctx.textAlign = 'right';
-      ctx.fillText(pVal.toFixed(1), padL - 8, y + 4);
-    }
-
-    // Render candles
-    let selectedMarkerX: number | null = null;
-    let selectedMarkerY: number | null = null;
-
-    visibleCandles.forEach((c, idx) => {
-      const x = padL + idx * stepX + stepX / 2;
-      const isUp = c.close >= c.open;
-      const col = isUp ? '#16a34a' : '#dc2626';
-
-      const highY = padT + ((maxP - c.high) / priceSpan) * plotH;
-      const lowY = padT + ((maxP - c.low) / priceSpan) * plotH;
-      const openY = padT + ((maxP - c.open) / priceSpan) * plotH;
-      const closeY = padT + ((maxP - c.close) / priceSpan) * plotH;
-
-      // Wick
-      ctx.strokeStyle = col;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x, highY);
-      ctx.lineTo(x, lowY);
-      ctx.stroke();
-
-      // Body
-      const bodyTop = Math.min(openY, closeY);
-      const bodyH = Math.max(Math.abs(closeY - openY), 1.5);
-      ctx.fillStyle = col;
-      ctx.fillRect(x - candleW / 2, bodyTop, candleW, bodyH);
-
-      // Selected buy candle marker
-      if (Math.abs(c.close_time_ms - buyTimeMs) < 60000 || Math.abs(c.open_time_ms - buyTimeMs) < 60000) {
-        selectedMarkerX = x;
-        selectedMarkerY = closeY;
-      }
-    });
-
-    // Time labels at bottom
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '10px monospace';
-    ctx.textAlign = 'center';
-    const labelStep = Math.max(1, Math.floor(visibleCandles.length / 5));
-    for (let i = 0; i < visibleCandles.length; i += labelStep) {
-      const c = visibleCandles[i];
-      const x = padL + i * stepX + stepX / 2;
-      const d = new Date(c.close_time_ms + 7 * 3600 * 1000);
-      const timeStr = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
-      ctx.fillText(timeStr, x, h - 12);
-    }
-
-    // UTC+7 indicator
-    ctx.fillStyle = '#64748b';
-    ctx.font = 'bold 9px monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText('UTC+7', w - padR + 32, h - 12);
-
-    // Horizontal Buy Price Line
-    if (!isNaN(currentBuyPrice) && currentBuyPrice > 0) {
-      const lineY = padT + ((maxP - currentBuyPrice) / priceSpan) * plotH;
-      ctx.save();
-      ctx.setLineDash([5, 4]);
-      ctx.strokeStyle = '#2563eb';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(padL, lineY);
-      ctx.lineTo(w - padR, lineY);
-      ctx.stroke();
-      ctx.restore();
-
-      ctx.fillStyle = '#2563eb';
-      ctx.font = 'bold 11px sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText(`Điểm mua giả định: $${currentBuyPrice.toLocaleString()}`, padL + 8, lineY - 6);
-    }
-
-    // Dot Marker on Chart
-    if (selectedMarkerX !== null) {
-      const targetMarkerY = !isNaN(currentBuyPrice) && currentBuyPrice > 0
-        ? padT + ((maxP - currentBuyPrice) / priceSpan) * plotH
-        : (selectedMarkerY || padT + plotH / 2);
-
-      ctx.beginPath();
-      ctx.arc(selectedMarkerX, targetMarkerY, 8, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(37, 99, 235, 0.25)';
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(selectedMarkerX, targetMarkerY, 4, 0, Math.PI * 2);
-      ctx.fillStyle = '#2563eb';
-      ctx.fill();
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-  }, [visibleCandles, buyTimeMs, buyPriceInput]);
-
-  useEffect(() => {
-    drawChart();
-  }, [drawChart]);
-
-  // Pan & Click handlers
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (e.button === 0) {
-      setIsDragging(true);
-      hasDraggedRef.current = false;
-      dragStartXRef.current = e.clientX;
-      dragStartOffsetRef.current = offsetRight;
-    }
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDragging) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const deltaX = e.clientX - dragStartXRef.current;
-    if (Math.abs(deltaX) > 3) {
-      hasDraggedRef.current = true;
-    }
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = rect.width > 0 ? canvas.width / rect.width : 1;
-    const padL = 60;
-    const padR = 40;
-    const plotW = canvas.width - padL - padR;
-    const slotWidth = plotW / Math.max(1, visibleCandles.length);
-    const candleShift = Math.round((deltaX * scaleX) / Math.max(1, slotWidth));
-    const maxOffset = Math.max(0, candles.length - visibleCount);
-    const newOffset = Math.max(0, Math.min(maxOffset, dragStartOffsetRef.current + candleShift));
-    setOffsetRight(newOffset);
-  };
-
-  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    setIsDragging(false);
-    if (!hasDraggedRef.current) {
-      const canvas = canvasRef.current;
-      if (!canvas || visibleCandles.length === 0) return;
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const padL = 60;
-      const padR = 40;
-      const plotW = canvas.width - padL - padR;
-      const relX = (x / rect.width) * canvas.width - padL;
-      if (relX < 0 || relX > plotW) return;
-
-      const stepX = plotW / Math.max(visibleCandles.length, 1);
-      const idx = Math.min(Math.max(0, Math.floor(relX / stepX)), visibleCandles.length - 1);
-      const picked = visibleCandles[idx];
-      setBuyTimeMs(picked.close_time_ms);
-      setManualDateTime(formatForDateTimeLocalUtc7(picked.close_time_ms));
-      setBuyPriceInput(picked.close.toString());
-    }
-  };
 
   // Step 1 -> Step 2: Create Job
   const handleRunAIJob = async () => {
@@ -464,50 +217,45 @@ export function ReplayPlayer({
     }
   };
 
-  // Step 3: Vote UP/DOWN
-  const handleVote = async (direction: 'UP' | 'DOWN') => {
-    setErrorMsg(null);
-    setIsVoting(true);
-    try {
-      if (externalJob) {
-        const res = await fetch(`/api/external-analysis/jobs/${externalJob.id}/vote`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ vote: direction }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          setErrorMsg(data.error || 'Không thể lưu dự đoán cá nhân.');
-          return;
-        }
-        setExternalJob(data);
-      } else if (simulationJob) {
-        const res = await fetch(`/api/replay/jobs/${simulationJob.job_id}/vote`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_direction: direction }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          setErrorMsg(data.error || 'Không thể lưu dự đoán.');
-          return;
-        }
-        setSimulationJob(data);
-      }
-    } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : 'Lỗi gửi dự đoán.');
-    } finally {
-      setIsVoting(false);
-    }
-  };
+  // Polling for background execution of external analysis job
+  useEffect(() => {
+    if (!externalJob) return;
+    const inProgressStatuses: ExternalAnalysisStatus[] = [
+      'PREPARING',
+      'PREPARING_FEED',
+      'ANALYZING',
+      'RESEARCHING',
+      'MATCHING',
+      'SYNTHESIZING',
+      'CALLING',
+    ];
+    if (!inProgressStatuses.includes(externalJob.status)) return;
 
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/external-analysis/jobs/${externalJob.id}`);
+        if (res.ok) {
+          const updated = (await res.json()) as ExternalAnalysisJobDTO;
+          setExternalJob(updated);
+        }
+      } catch {
+        // Silently continue polling on network glitch
+      }
+    }, 1500);
+
+    return () => clearInterval(timer);
+  }, [externalJob]);
+
+  // Step 3: Vote UP/DOWN
   // Step 4: Reveal Outcome
-  const handleRevealOutcome = async () => {
+  const handleRevealOutcome = async (targetJob?: ExternalAnalysisJobDTO | SimulationJobResponse | null) => {
     setErrorMsg(null);
     setIsRevealing(true);
+    const activeExternal = targetJob && 'context_variant' in targetJob ? targetJob : externalJob;
+    const activeSim = targetJob && 'job_id' in targetJob ? targetJob : simulationJob;
     try {
-      if (externalJob) {
-        const res = await fetch(`/api/external-analysis/jobs/${externalJob.id}/reveal`, {
+      if (activeExternal) {
+        const res = await fetch(`/api/external-analysis/jobs/${activeExternal.id}/reveal`, {
           method: 'POST',
         });
         const data = await res.json();
@@ -516,8 +264,8 @@ export function ReplayPlayer({
           return;
         }
         setExternalJob(data);
-      } else if (simulationJob) {
-        const res = await fetch(`/api/replay/jobs/${simulationJob.job_id}/reveal`, {
+      } else if (activeSim) {
+        const res = await fetch(`/api/replay/jobs/${activeSim.job_id}/reveal`, {
           method: 'POST',
         });
         const data = await res.json();
@@ -531,6 +279,56 @@ export function ReplayPlayer({
       setErrorMsg(err instanceof Error ? err.message : 'Lỗi kết nối khi xem kết quả.');
     } finally {
       setIsRevealing(false);
+    }
+  };
+
+  // Step 3: Vote UP/DOWN -> Tự động chuyển Step 4 & Tự động mở kết quả
+  const handleVote = async (direction: 'UP' | 'DOWN') => {
+    setErrorMsg(null);
+    setIsVoting(true);
+    try {
+      let savedExternal: ExternalAnalysisJobDTO | null = null;
+      let savedSim: SimulationJobResponse | null = null;
+
+      if (externalJob) {
+        const res = await fetch(`/api/external-analysis/jobs/${externalJob.id}/vote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vote: direction }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setErrorMsg(data.error || 'Không thể lưu dự đoán cá nhân.');
+          return;
+        }
+        savedExternal = data;
+        setExternalJob(data);
+      } else if (simulationJob) {
+        const res = await fetch(`/api/replay/jobs/${simulationJob.job_id}/vote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_direction: direction }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setErrorMsg(data.error || 'Không thể lưu dự đoán.');
+          return;
+        }
+        savedSim = data;
+        setSimulationJob(data);
+      }
+
+      // Tự động chuyển ngay sang Bước 4 và tự động hiển thị kết quả
+      setActiveTab('step4');
+      if (savedExternal) {
+        await handleRevealOutcome(savedExternal);
+      } else if (savedSim) {
+        await handleRevealOutcome(savedSim);
+      }
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Lỗi gửi dự đoán.');
+    } finally {
+      setIsVoting(false);
     }
   };
 
@@ -656,72 +454,36 @@ export function ReplayPlayer({
           </div>
 
           {/* Canvas Chart Area */}
-          <div
-            style={{
-              position: 'relative',
-              background: '#ffffff',
-              border: '1px solid #e2e8f0',
-              borderRadius: 6,
-              overflow: 'hidden',
-            }}
-          >
-            {/* Chart Toolbar */}
-            <div
-              style={{
-                position: 'absolute',
-                top: 8,
-                right: 8,
-                zIndex: 10,
-                display: 'flex',
-                gap: 6,
-                background: 'rgba(255, 255, 255, 0.9)',
-                padding: '4px 6px',
-                borderRadius: 4,
-                border: '1px solid #e2e8f0',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => setVisibleCount((prev) => Math.max(15, Math.round(prev * 0.75)))}
-                title="Phóng to (Zoom In)"
-                style={{ padding: '3px 8px', fontSize: 12, background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: 4, cursor: 'pointer' }}
-              >
-                +
-              </button>
-              <button
-                type="button"
-                onClick={() => setVisibleCount((prev) => Math.min(candles.length, Math.round(prev * 1.35)))}
-                title="Thu nhỏ (Zoom Out)"
-                style={{ padding: '3px 8px', fontSize: 12, background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: 4, cursor: 'pointer' }}
-              >
-                −
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setVisibleCount(Math.min(candles.length, 100) || 60);
-                  setOffsetRight(0);
-                }}
-                title="Đặt lại khung nhìn"
-                style={{ padding: '3px 8px', fontSize: 11, background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: 4, cursor: 'pointer' }}
-              >
-                ⟲ Reset
-              </button>
-            </div>
-
+          <div style={{ position: 'relative', marginBottom: 18 }}>
             {isLoadingCandles && (
-              <div style={{ position: 'absolute', top: '50%', left: '42%', fontSize: 14, color: '#64748b', fontWeight: 600 }}>
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 10,
+                  left: 10,
+                  zIndex: 20,
+                  fontSize: 12,
+                  color: '#475569',
+                  fontWeight: 600,
+                  background: 'rgba(255, 255, 255, 0.92)',
+                  padding: '4px 10px',
+                  borderRadius: 4,
+                  border: '1px solid #cbd5e1',
+                }}
+              >
                 ⏳ Đang tải nến snapshot...
               </div>
             )}
-            <canvas
-              ref={canvasRef}
-              width={960}
-              height={360}
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              style={{ width: '100%', height: '360px', cursor: isDragging ? 'grabbing' : 'crosshair', display: 'block', userSelect: 'none' }}
+            <ReplayChart
+              candles={candles}
+              phase="selection"
+              buyTimeMs={buyTimeMs}
+              buyPrice={parseFloat(buyPriceInput) || 0}
+              onSelect={(picked) => {
+                setBuyTimeMs(picked.close_time_ms);
+                setManualDateTime(formatForDateTimeLocalUtc7(picked.close_time_ms));
+                setBuyPriceInput(picked.close.toString());
+              }}
             />
           </div>
 
@@ -1032,7 +794,7 @@ export function ReplayPlayer({
             Bước 2: Kết quả nhận định từ Mô hình AI
           </h2>
           <p style={{ margin: '0 0 16px 0', fontSize: 13, color: '#64748b' }}>
-            Mô hình được cung cấp strictly các nến lịch sử có thời gian khả dụng ≤ mốc mua (Zero-Lookahead Causal Window).
+            Mô hình chỉ được đọc dữ liệu nến lịch sử đã đóng trước mốc mua (Cửa sổ 6 giờ sạch, tuyệt đối không nhìn trước tương lai).
           </p>
 
           {/* Job Overview Specs */}
@@ -1076,6 +838,29 @@ export function ReplayPlayer({
             )}
           </div>
 
+          {/* Biểu đồ nến trước thời điểm mua — Vùng dự đoán được che */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>
+                Biểu đồ nến lịch sử trước mốc mua (Vùng dự đoán được che bảo vệ):
+              </span>
+              <span style={{ fontSize: 12, color: '#64748b' }}>
+                Khóa tương lai từ t đến +{externalJob ? externalJob.horizon_minutes : simulationJob?.horizon_minutes || 30}m
+              </span>
+            </div>
+            <ReplayChart
+              candles={candles}
+              phase="analysis"
+              buyTimeMs={externalJob ? externalJob.prediction_time_t_ms : (simulationJob?.buy_time_ms || buyTimeMs)}
+              buyPrice={externalJob ? externalJob.purchase_price_p : (simulationJob?.buy_price || parseFloat(buyPriceInput) || 0)}
+              targetTimeMs={(externalJob ? externalJob.prediction_time_t_ms : (simulationJob?.buy_time_ms || buyTimeMs)) + (externalJob ? externalJob.horizon_minutes : simulationJob?.horizon_minutes || 30) * 60 * 1000}
+              evidenceTimes={externalJob?.ai_prediction?.evidence_candle_times || []}
+            />
+            <p style={{ margin: '6px 0 0 0', fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
+              💡 Nến tương lai sau mốc mua (t) bị che hoàn toàn để đảm bảo tính khách quan không nhìn trước.
+            </p>
+          </div>
+
           {/* EXTERNAL GEMINI ANALYSIS VIEW */}
           {externalJob && (
             <div>
@@ -1100,6 +885,61 @@ export function ReplayPlayer({
                     <strong>Cảnh báo Hồi cứu:</strong> Nhận định API thử nghiệm — không phải dự báo đã kiểm định.
                     Model hiện nay có thể đã được huấn luyện với thông tin sau mốc lịch sử này.
                   </div>
+                </div>
+              )}
+
+              {/* Multi-stage Progress Stepper for in-progress statuses */}
+              {['PREPARING', 'PREPARING_FEED', 'ANALYZING', 'RESEARCHING', 'MATCHING', 'SYNTHESIZING', 'CALLING'].includes(externalJob.status) && (
+                <div style={{ padding: '16px', borderRadius: 8, background: '#f8fafc', border: '1px solid #cbd5e1', marginBottom: 18 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                    <span style={{ fontSize: 16 }}>🔄</span>
+                    <strong style={{ fontSize: 13, color: '#1e293b' }}>
+                      Đang thực hiện quy trình nghiên cứu bằng chứng định lượng (5 bước liên hoàn)...
+                    </strong>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, fontSize: 12 }}>
+                    {[
+                      { id: 'PREPARING_FEED', label: '1. Chuẩn bị feed 6h' },
+                      { id: 'ANALYZING', label: '2. Giả thuyết sơ bộ' },
+                      { id: 'RESEARCHING', label: '3. Google Grounding' },
+                      { id: 'MATCHING', label: '4. Đối chiếu tiêu chí' },
+                      { id: 'SYNTHESIZING', label: '5. Tổng hợp báo cáo' },
+                    ].map((step, idx) => {
+                      const isCurrent = externalJob.status === step.id;
+                      return (
+                        <div
+                          key={idx}
+                          style={{
+                            padding: '8px 10px',
+                            borderRadius: 4,
+                            background: isCurrent ? '#dbeafe' : '#ffffff',
+                            border: isCurrent ? '1px solid #3b82f6' : '1px solid #e2e8f0',
+                            color: isCurrent ? '#1d4ed8' : '#64748b',
+                            fontWeight: isCurrent ? 700 : 500,
+                          }}
+                        >
+                          {step.label} {isCurrent && '⏳'}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Interruption / Incomplete / Insufficient History Banners */}
+              {externalJob.status === 'FAILED_INTERRUPTED' && (
+                <div style={{ padding: '14px 16px', borderRadius: 6, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', marginBottom: 16, fontSize: 13 }}>
+                  <strong>🛑 Tiến trình bị gián đoạn:</strong> {externalJob.error_message || 'Server khởi động lại trong khi đang chạy; không tự động gọi lại API để tránh chi phí ngoài ý muốn.'}
+                </div>
+              )}
+              {externalJob.status === 'RESEARCH_INCOMPLETE' && (
+                <div style={{ padding: '14px 16px', borderRadius: 6, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', marginBottom: 16, fontSize: 13 }}>
+                  <strong>⚠️ Nghiên cứu chưa đầy đủ:</strong> {externalJob.error_message || 'Không thể tra cứu hoặc truy xuất nguồn tài liệu độc lập.'}
+                </div>
+              )}
+              {externalJob.status === 'INSUFFICIENT_HISTORY' && (
+                <div style={{ padding: '14px 16px', borderRadius: 6, background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569', marginBottom: 16, fontSize: 13 }}>
+                  <strong>ℹ️ Thiếu dữ liệu lịch sử:</strong> Cần tối thiểu 6 giờ nến liên tục trước mốc mua để xây dựng cửa sổ nhân quả.
                 </div>
               )}
 
@@ -1154,6 +994,22 @@ export function ReplayPlayer({
                   </div>
                   <div style={{ fontSize: 13, color: '#475569' }}>
                     Trạng thái: <strong>{externalJob.status}</strong> (Xác suất định lượng: <em>Chưa hiệu chuẩn</em>)
+                  </div>
+                </div>
+
+                {/* Tóm tắt nhận định bằng tiếng Việt rõ ràng */}
+                <div style={{ marginBottom: 14, padding: '10px 14px', borderRadius: 6, background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: 13, color: '#1e293b', fontWeight: 600, marginBottom: 4 }}>
+                    📌 Tóm tắt nhận định của AI:
+                  </div>
+                  <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.5 }}>
+                    Mô hình nhận định sau <strong>{externalJob.horizon_minutes} phút</strong>, giá thị trường sẽ{' '}
+                    <strong style={{ color: externalJob.ai_prediction?.direction === 'UP' ? '#16a34a' : externalJob.ai_prediction?.direction === 'DOWN' ? '#dc2626' : '#d97706' }}>
+                      {externalJob.ai_prediction?.direction === 'UP' && 'CAO HƠN (TĂNG)'}
+                      {externalJob.ai_prediction?.direction === 'DOWN' && 'THẤP HƠN (GIẢM)'}
+                      {externalJob.ai_prediction?.direction === 'ABSTAIN' && 'CHƯA ĐỦ CĂN CỨ KẾT LUẬN'}
+                    </strong>{' '}
+                    so với mức giá mua ban đầu <strong>${externalJob.purchase_price_p.toLocaleString()}</strong>.
                   </div>
                 </div>
 
@@ -1217,6 +1073,187 @@ export function ReplayPlayer({
                   </div>
                 )}
               </div>
+
+              {/* ENVELOPE: Pattern Diagnostic Criteria Table */}
+              {externalJob.evidence_envelope?.diagnostics && externalJob.evidence_envelope.diagnostics.length > 0 && (
+                <div style={{ marginBottom: 20, background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <h3 style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', margin: 0 }}>
+                      📊 Bảng đối chiếu tiêu chí mẫu hình (Deterministic Python Diagnostics):
+                    </h3>
+                    <span style={{ fontSize: 11, color: '#64748b' }}>Rule version v1 (Chỉ nến t, không lookahead)</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    {externalJob.evidence_envelope.diagnostics.map((diag, dIdx) => (
+                      <div key={dIdx} style={{ border: '1px solid #f1f5f9', borderRadius: 6, padding: '12px', background: '#fafafa' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <strong style={{ fontSize: 13, color: '#1e293b' }}>
+                            Mẫu hình: {diag.pattern_id}
+                          </strong>
+                          <span
+                            style={{
+                              fontSize: 11,
+                              padding: '2px 8px',
+                              borderRadius: 4,
+                              fontWeight: 600,
+                              background:
+                                diag.overall_match_status === 'KHỚP_THEO_RULE_VERSION'
+                                  ? '#dcfce7'
+                                  : diag.overall_match_status === 'KHÔNG_KHỚP'
+                                  ? '#fee2e2'
+                                  : '#fef3c7',
+                              color:
+                                diag.overall_match_status === 'KHỚP_THEO_RULE_VERSION'
+                                  ? '#15803d'
+                                  : diag.overall_match_status === 'KHÔNG_KHỚP'
+                                  ? '#b91c1c'
+                                  : '#b45309',
+                            }}
+                          >
+                            {diag.overall_match_status}
+                          </span>
+                        </div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid #e2e8f0', color: '#64748b', textAlign: 'left' }}>
+                              <th style={{ padding: '4px 6px' }}>Tiêu chí</th>
+                              <th style={{ padding: '4px 6px' }}>Quy tắc & Nguồn</th>
+                              <th style={{ padding: '4px 6px' }}>Đo được</th>
+                              <th style={{ padding: '4px 6px' }}>Điều kiện</th>
+                              <th style={{ padding: '4px 6px' }}>Kết quả</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {diag.criteria.map((cr, cIdx) => (
+                              <tr key={cIdx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                <td style={{ padding: '6px' }}>
+                                  <strong style={{ color: '#334155' }}>{cr.criterion_id}</strong>
+                                  <div style={{ fontSize: 11, color: '#64748b' }}>{cr.description}</div>
+                                </td>
+                                <td style={{ padding: '6px', fontSize: 11, color: '#64748b' }}>
+                                  {cr.formula_or_params} ({cr.rule_origin})
+                                </td>
+                                <td style={{ padding: '6px', fontFamily: 'monospace' }}>{cr.measured_value}</td>
+                                <td style={{ padding: '6px', color: '#475569' }}>{cr.expected_relation}</td>
+                                <td style={{ padding: '6px' }}>
+                                  <span
+                                    style={{
+                                      padding: '2px 6px',
+                                      borderRadius: 4,
+                                      fontSize: 10,
+                                      fontWeight: 700,
+                                      background:
+                                        cr.status === 'PASS'
+                                          ? '#dcfce7'
+                                          : cr.status === 'FAIL'
+                                          ? '#fee2e2'
+                                          : '#f1f5f9',
+                                      color:
+                                        cr.status === 'PASS'
+                                          ? '#166534'
+                                          : cr.status === 'FAIL'
+                                          ? '#991b1b'
+                                          : '#475569',
+                                    }}
+                                  >
+                                    {cr.status}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ENVELOPE: Research Sources & Literature Citations */}
+              {externalJob.evidence_envelope?.research && (
+                <div style={{ marginBottom: 20, background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <h3 style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', margin: 0 }}>
+                      🔍 Nguồn tài liệu & Tra cứu Google Search Grounding:
+                    </h3>
+                    <span style={{ fontSize: 11, color: '#64748b' }}>
+                      Provider: {externalJob.evidence_envelope.research.search_provider || 'Gemini Search Grounding'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {externalJob.evidence_envelope.research.sources?.map((s, sIdx) => (
+                      <div key={sIdx} style={{ padding: '10px', borderRadius: 6, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                          <a
+                            href={s.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize: 13, fontWeight: 600, color: '#2563eb', textDecoration: 'none' }}
+                          >
+                            🔗 {s.title}
+                          </a>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              padding: '2px 6px',
+                              borderRadius: 4,
+                              background: s.access_status === 'ACCESSIBLE' ? '#dbeafe' : '#fef3c7',
+                              color: s.access_status === 'ACCESSIBLE' ? '#1e40af' : '#92400e',
+                            }}
+                          >
+                            {s.access_status}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>
+                          Tác giả / Nhà xuất bản: {s.author_or_publisher} | Mục: {s.section_locator}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#334155', fontStyle: 'italic', background: '#ffffff', padding: '6px', borderRadius: 4, border: '1px solid #f1f5f9' }}>
+                          &ldquo;{s.excerpt}&rdquo;
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {externalJob.evidence_envelope.research.contradictory_sources_or_facts && (
+                    <div style={{ marginTop: 12, padding: '10px', borderRadius: 6, background: '#fffbeb', border: '1px solid #fef3c7', fontSize: 12, color: '#92400e' }}>
+                      <strong>Quan sát phản biện & dữ kiện trái chiều:</strong>
+                      <ul style={{ margin: '4px 0 0 0', paddingLeft: 18 }}>
+                        {externalJob.evidence_envelope.research.contradictory_sources_or_facts.map((fact, fIdx) => (
+                          <li key={fIdx}>{fact}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ENVELOPE: Structured 7-Section Analytical Report */}
+              {externalJob.evidence_envelope?.report_sections && (
+                <div style={{ marginBottom: 20, background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '16px' }}>
+                  <h3 style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', margin: '0 0 14px 0' }}>
+                    📑 Báo cáo phân tích chuyên sâu đầy đủ (7 phần tiếng Việt):
+                  </h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {[
+                      { title: '1. Câu hỏi và dữ liệu', content: externalJob.evidence_envelope.report_sections.cau_hoi_va_du_lieu },
+                      { title: '2. Diễn biến quan sát', content: externalJob.evidence_envelope.report_sections.dien_bien_quan_sat },
+                      { title: '3. Giả thuyết và mẫu được kiểm', content: externalJob.evidence_envelope.report_sections.gia_thuyet_va_mau_duoc_kiem },
+                      { title: '4. Tài liệu đã tra cứu', content: externalJob.evidence_envelope.report_sections.tai_lieu_da_tra },
+                      { title: '5. Lập luận và phản biện', content: externalJob.evidence_envelope.report_sections.lap_luan_va_phan_bien },
+                      { title: '6. Kết luận có điều kiện', content: externalJob.evidence_envelope.report_sections.ket_luan_co_dieu_kien },
+                      { title: '7. Giới hạn và khả năng áp dụng', content: externalJob.evidence_envelope.report_sections.gioi_han_va_kha_nang_ap_dung },
+                    ].map((sec, sIdx) => sec.content ? (
+                      <div key={sIdx} style={{ padding: '12px', borderRadius: 6, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                        <h4 style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', margin: '0 0 6px 0' }}>
+                          {sec.title}
+                        </h4>
+                        <p style={{ margin: 0, fontSize: 13, color: '#334155', lineHeight: 1.6, whiteSpace: 'pre-line' }}>
+                          {sec.content}
+                        </p>
+                      </div>
+                    ) : null)}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1336,7 +1373,11 @@ export function ReplayPlayer({
               </div>
             </div>
           ) : (
-            <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
+            <div>
+          <div style={{ padding: '10px 14px', borderRadius: 6, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e40af', fontSize: 13, marginBottom: 16 }}>
+            ℹ️ <strong>Lưu ý:</strong> Khi bạn bấm chọn <strong>TĂNG</strong> hoặc <strong>GIẢM</strong>, hệ thống sẽ lưu dự đoán và <strong>tự động chuyển sang Bước 4 để hiển thị ngay kết quả thực tế</strong> mà không cần bấm thêm.
+          </div>
+          <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
               <button
                 type="button"
                 onClick={() => handleVote('UP')}
@@ -1391,6 +1432,7 @@ export function ReplayPlayer({
                 </span>
               </button>
             </div>
+          </div>
           )}
 
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -1424,7 +1466,26 @@ export function ReplayPlayer({
             Đối chiếu giá nến thực tế tại mốc t + 30m với giá mua giả định P để chấm điểm độc lập cho AI và bạn.
           </p>
 
-          {!hasOutcome ? (
+          {isRevealing ? (
+            <div
+              style={{
+                padding: '36px 20px',
+                textAlign: 'center',
+                borderRadius: 8,
+                background: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                marginBottom: 20,
+              }}
+            >
+              <div style={{ fontSize: 28, marginBottom: 10 }}>⏳</div>
+              <strong style={{ fontSize: 15, color: '#0f172a', display: 'block', marginBottom: 4 }}>
+                Đang tải và mở kết quả thực tế của thị trường...
+              </strong>
+              <span style={{ fontSize: 13, color: '#64748b' }}>
+                Hệ thống đang đối chiếu nến đóng sau 30 phút với giá mua để chấm điểm độc lập cho AI và bạn.
+              </span>
+            </div>
+          ) : !hasOutcome ? (
             <div
               style={{
                 padding: '24px',
@@ -1435,25 +1496,25 @@ export function ReplayPlayer({
                 marginBottom: 20,
               }}
             >
-              <p style={{ margin: '0 0 16px 0', fontSize: 14, color: '#475569' }}>
-                Cả hai dự đoán (AI và Bạn) đã được niêm phong an toàn. Hãy mở phong ấn để đối chiếu với dữ liệu thị trường thực tế.
+              <p style={{ margin: '0 0 14px 0', fontSize: 14, color: '#475569' }}>
+                Dự đoán đã được ghi nhận an toàn. Nhấn nút bên dưới để tải và đối chiếu kết quả:
               </p>
               <button
                 type="button"
-                onClick={handleRevealOutcome}
+                onClick={() => handleRevealOutcome()}
                 disabled={isRevealing}
                 style={{
                   padding: '12px 28px',
                   fontSize: 15,
                   fontWeight: 700,
-                  background: isRevealing ? '#94a3b8' : '#16a34a',
+                  background: '#16a34a',
                   color: '#ffffff',
                   border: 'none',
                   borderRadius: 6,
-                  cursor: isRevealing ? 'not-allowed' : 'pointer',
+                  cursor: 'pointer',
                 }}
               >
-                {isRevealing ? '⏳ Đang kiểm tra nến tương lai...' : '🔍 Xem Kết quả thực tế'}
+                🔍 Xem Kết quả thực tế
               </button>
             </div>
           ) : (
@@ -1634,6 +1695,27 @@ export function ReplayPlayer({
                   </div>
                 </div>
               )}
+              {/* Realized Chart Outcome & Comparison */}
+              <div style={{ marginTop: 24, marginBottom: 20 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>
+                    Biểu đồ đối chiếu thực tế (Đã mở vùng dự đoán 30 phút):
+                  </span>
+                  <span style={{ fontSize: 12, color: '#16a34a', fontWeight: 600 }}>
+                    ✓ Đã mở vùng sau mốc t — Đối chiếu điểm mua P và nến kết quả
+                  </span>
+                </div>
+                <ReplayChart
+                  candles={candles}
+                  phase="result"
+                  buyTimeMs={externalJob ? externalJob.prediction_time_t_ms : (simulationJob?.buy_time_ms || buyTimeMs)}
+                  buyPrice={externalJob ? externalJob.purchase_price_p : (simulationJob?.buy_price || parseFloat(buyPriceInput) || 0)}
+                  targetTimeMs={(externalJob ? externalJob.prediction_time_t_ms : (simulationJob?.buy_time_ms || buyTimeMs)) + (externalJob ? externalJob.horizon_minutes : simulationJob?.horizon_minutes || 30) * 60 * 1000}
+                  targetPrice={externalJob ? externalJob.target_price : (simulationJob?.outcome?.future_price || null)}
+                  targetCandleCloseMs={(externalJob ? externalJob.prediction_time_t_ms : (simulationJob?.buy_time_ms || buyTimeMs)) + (externalJob ? externalJob.horizon_minutes : simulationJob?.horizon_minutes || 30) * 60 * 1000}
+                  showAll={true}
+                />
+              </div>
             </div>
           )}
 
