@@ -4,13 +4,15 @@ description: "Preview rồi lưu snapshot; mô phỏng AI dự báo trước, ng
 status: in-progress
 priority: P1
 tags: [research, data, frontend, backend, replay]
-blockedBy: []
+blockedBy: [261010-replay-result-ux]
 blocks: []
 created: 2026-10-09
 ---
 # Kế hoạch preview snapshot và mô phỏng dự đoán
 
 > **IN-PROGRESS: Phase 01 thiếu preview; mô phỏng AI + người chưa nghiệm thu.** UX chính do người dùng xác nhận ngày 2026-10-09: preview → nạp snapshot → đánh dấu điểm mua → job AI → người chọn UP/DOWN (lưu/chấm riêng, **không mù** vì thấy AI trước) → chấm cả hai khi có giá thực tế. Không ép nghiên cứu so cửa sổ học 1/3/6/9 tháng; tua từng nến không phải luồng chính.
+
+**Cập nhật UX 2026-10-10 — đang chờ plan [Replay dễ đọc và kết quả tự mở](../261010-replay-result-ux/plan.md):** Phase 03 chưa thể nghiệm thu trước khi nhận định AI dễ hiểu, có preview biểu đồ ở nhận định/kết quả và lưu lựa chọn bước 3 xong tự mở bước 4. Chỉ dẫn cũ bên dưới yêu cầu bấm riêng “Xem kết quả” đã được thay; backend vẫn khóa vote và kiểm đủ nến trước reveal. Quan hệ blocked chỉ áp gate UX Phase 03, không dừng ingestion/model research; chưa triển khai trong lượt lập kế hoạch này.
 
 ## Mục tiêu và lời hứa trung thực
 
