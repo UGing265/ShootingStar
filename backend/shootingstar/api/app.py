@@ -4,19 +4,53 @@ STRICT INVARIANT:
 Cost-adjusted metrics remain explicitly gated as 'Unavailable (pending slippage method)'.
 No fabricated profits, slippages, or fake claims.
 """
-
+from contextlib import asynccontextmanager
+import logging
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from shootingstar.adapters.db.models import ExternalAnalysisJobModel
+from shootingstar.adapters.db.session import get_db_session
 from shootingstar.api.read_routes import router as read_router
 from shootingstar.api.ingestion_routes import router as ingestion_router
 from shootingstar.api.replay_routes import router as replay_router
 from shootingstar.api.external_routes import router as external_router
 from shootingstar.api.lesson_routes import router as lesson_router
+from shootingstar.application.external_analysis.contracts import AnalysisStatus
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan managing startup sweep for interrupted jobs."""
+    try:
+        with get_db_session() as session:
+            interrupted = session.query(ExternalAnalysisJobModel).filter(
+                ExternalAnalysisJobModel.status.in_([
+                    AnalysisStatus.PREPARING_FEED.value,
+                    AnalysisStatus.ANALYZING.value,
+                    AnalysisStatus.RESEARCHING.value,
+                    AnalysisStatus.MATCHING.value,
+                    AnalysisStatus.SYNTHESIZING.value,
+                ])
+            ).all()
+            for job in interrupted:
+                job.status = AnalysisStatus.FAILED_INTERRUPTED.value
+                job.error_message = "Tiến trình bị gián đoạn do khởi động lại server; không tự động gọi lại API có phí"
+            session.commit()
+            if interrupted:
+                logger.info("Startup sweep marked %d interrupted jobs as FAILED_INTERRUPTED.", len(interrupted))
+    except Exception as e:
+        logger.warning("Startup interrupted jobs sweep skipped or failed: %s", e)
+
+    yield
+
 
 app = FastAPI(
     title="ShootingStar Research Platform",
     description="Local-first, evidence-first research platform for BTCUSDT 30-minute predictive modeling.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.include_router(read_router)

@@ -268,7 +268,7 @@ class PatternHitModel(Base):
 class AuditLogModel(Base):
     __tablename__ = "audit_logs"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     entity_type = Column(String(64), nullable=False, index=True)
     entity_id = Column(String(64), nullable=False, index=True)
     action = Column(String(64), nullable=False)
@@ -299,6 +299,7 @@ class ExternalAnalysisJobModel(Base):
     evidence_times_json = Column(Text, nullable=True)
     lesson_ids_json = Column(Text, nullable=True)
     raw_output_json = Column(Text, nullable=True)
+    evidence_envelope_json = Column(Text, nullable=True)
 
     prompt_tokens = Column(Integer, nullable=True)
     completion_tokens = Column(Integer, nullable=True)

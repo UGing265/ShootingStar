@@ -11,7 +11,7 @@ _ENGINE: Optional[Engine] = None
 _SESSION_FACTORY: Optional[sessionmaker[Session]] = None
 
 
-def load_env_file() -> None:
+def load_env_file(override: bool = False) -> None:
     """Loads key-value pairs from .env into os.environ if present."""
     env_path = Path(".env")
     if not env_path.exists():
@@ -28,7 +28,7 @@ def load_env_file() -> None:
             key, val = line.split("=", 1)
             key = key.strip()
             val = val.strip().strip("'\"")
-            if key not in os.environ:
+            if override or key not in os.environ:
                 os.environ[key] = val
 def get_database_url(test_mode: bool = False) -> str:
     """Returns database connection URL from environment.
@@ -43,6 +43,12 @@ def get_database_url(test_mode: bool = False) -> str:
             f"Database configuration missing: environment variable '{env_var}' is not set. "
             f"Please configure it in environment or git-ignored .env file."
         )
+    if url.startswith("sqlite:///") and not url.startswith("sqlite:///:memory:"):
+        path_str = url[len("sqlite:///"):]
+        p = Path(path_str)
+        if not p.is_absolute():
+            repo_root = Path(__file__).resolve().parents[4]
+            url = f"sqlite:///{(repo_root / p).as_posix()}"
     return url
 def get_engine(database_url: Optional[str] = None, echo: bool = False) -> Engine:
     """Creates or returns SQLAlchemy engine."""

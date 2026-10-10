@@ -1,8 +1,9 @@
 """API endpoints for external model analysis jobs with strict fail-closed administrator gating."""
 
+import logging
 import os
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Header, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from shootingstar.adapters.db.repository import ExternalAnalysisJobRepository, SnapshotRepository
@@ -10,10 +11,13 @@ from shootingstar.adapters.db.session import get_db_session, load_env_file
 from shootingstar.adapters.storage import SnapshotStorage
 from shootingstar.application.external_analysis.contracts import (
     AnalysisMode,
+    AnalysisStatus,
     ContextVariant,
     ExternalAnalysisRequest,
 )
 from shootingstar.application.external_analysis.service import ExternalAnalysisService
+
+logger = logging.getLogger(__name__)
 
 load_env_file()
 router = APIRouter(prefix="/external-analysis", tags=["External Analysis"])
@@ -57,13 +61,14 @@ def verify_admin_authorization(x_admin_key: Optional[str] = Header(None, alias="
         )
 
 
-@router.post("/jobs", status_code=status.HTTP_201_CREATED)
+@router.post("/jobs", status_code=status.HTTP_202_ACCEPTED)
 def create_external_analysis_job(
     req: CreateAnalysisJobRequest,
+    background_tasks: BackgroundTasks,
     mock_mode: bool = Query(False),
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
 ):
-    """Creates and triggers an external analysis job. Strictly protected behind admin gate."""
+    """Creates and triggers an external analysis job. Returns HTTP 202 Accepted. Protected behind admin gate."""
     verify_admin_authorization(x_admin_key)
 
     try:
@@ -76,6 +81,7 @@ def create_external_analysis_job(
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid analysis mode '{req.mode}'. Must be 'RETROSPECTIVE' or 'PROSPECTIVE'.")
 
+    is_mock = mock_mode or req.mock_mode
     storage = SnapshotStorage()
     with get_db_session() as session:
         job_repo = ExternalAnalysisJobRepository(session)
@@ -96,10 +102,8 @@ def create_external_analysis_job(
         )
 
         try:
-            is_mock = mock_mode or req.mock_mode
-            job_dto = service.create_analysis_job(request=domain_req, mock_mode=is_mock)
+            job_dto = service.create_analysis_job(request=domain_req, mock_mode=is_mock, run_immediately=False)
             session.commit()
-            return job_dto
         except ValueError as e:
             session.rollback()
             raise HTTPException(status_code=404, detail=str(e))
@@ -107,6 +111,39 @@ def create_external_analysis_job(
             session.rollback()
             raise HTTPException(status_code=500, detail=f"External analysis failed: {e}")
 
+    if job_dto.status == AnalysisStatus.PREPARING_FEED.value:
+        background_tasks.add_task(_execute_job_in_background, job_dto.id, is_mock)
+
+    return job_dto
+
+
+def _execute_job_in_background(job_id: str, is_mock: bool) -> None:
+    """Runs pipeline stages in background using an isolated DB session."""
+    try:
+        storage = SnapshotStorage()
+        with get_db_session() as session:
+            job_repo = ExternalAnalysisJobRepository(session)
+            snap_repo = SnapshotRepository(session)
+            service = ExternalAnalysisService(
+                job_repository=job_repo,
+                snapshot_repository=snap_repo,
+                snapshot_storage=storage,
+            )
+            service.run_pipeline(job_id=job_id, mock_mode=is_mock)
+            session.commit()
+    except Exception as e:
+        logger.error("Background job execution error for %s: %s", job_id, e)
+        try:
+            with get_db_session() as session:
+                job_repo = ExternalAnalysisJobRepository(session)
+                job = job_repo.get_by_id(job_id)
+                if job:
+                    job.status = AnalysisStatus.FAILED.value
+                    job.error_message = f"Lỗi thực thi nền: {e}"
+                    job_repo.save(job)
+                    session.commit()
+        except Exception:
+            pass
 
 @router.get("/jobs/{job_id}")
 def get_external_analysis_job(
@@ -161,7 +198,12 @@ def record_user_vote(
             return updated_dto
         except ValueError as e:
             session.rollback()
-            raise HTTPException(status_code=400, detail=str(e))
+            err_msg = str(e)
+            if "already locked" in err_msg:
+                raise HTTPException(status_code=409, detail=err_msg)
+            if "not found" in err_msg.lower():
+                raise HTTPException(status_code=404, detail=err_msg)
+            raise HTTPException(status_code=400, detail=err_msg)
 
 
 @router.post("/jobs/{job_id}/reveal")
@@ -187,4 +229,7 @@ def reveal_external_analysis_outcome(
             return revealed_dto
         except ValueError as e:
             session.rollback()
-            raise HTTPException(status_code=404, detail=str(e))
+            err_msg = str(e)
+            if "not found" in err_msg.lower():
+                raise HTTPException(status_code=404, detail=err_msg)
+            raise HTTPException(status_code=400, detail=err_msg)

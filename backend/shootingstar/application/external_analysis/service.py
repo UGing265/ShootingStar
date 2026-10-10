@@ -1,5 +1,6 @@
 """External analysis orchestration service connecting storage, causal context, Gemini adapter, verifier, and repository."""
 
+import hashlib
 import json
 import logging
 import time
@@ -25,11 +26,20 @@ from shootingstar.application.external_analysis.context import (
     InsufficientHistoryError,
     build_context_a,
     build_context_b,
+    build_feed_contract,
     extract_causal_window,
+    feed_contract_to_dict,
+)
+from shootingstar.application.external_analysis.research_agent import (
+    ResearchAgent,
+    research_contract_to_dict,
 )
 from shootingstar.application.external_analysis.verifier import ExternalAnalysisVerifier
+from shootingstar.application.patterns import (
+    evaluate_pattern_diagnostics,
+    pattern_diagnostics_to_dict,
+)
 from shootingstar.domain.models import Timeframe
-
 logger = logging.getLogger(__name__)
 
 
@@ -42,27 +52,27 @@ class ExternalAnalysisService:
         snapshot_repository: SnapshotRepository,
         snapshot_storage: SnapshotStorage,
         gemini_adapter: Optional[GeminiModelAdapter] = None,
+        research_agent: Optional[ResearchAgent] = None,
         approved_lessons: Optional[List[Dict[str, Any]]] = None,
     ):
         self.job_repo = job_repository
         self.snapshot_repo = snapshot_repository
         self.snapshot_storage = snapshot_storage
         self.gemini_adapter = gemini_adapter or GeminiModelAdapter()
+        self.research_agent = research_agent or ResearchAgent(lesson_service=None, model_adapter=self.gemini_adapter)  # type: ignore
         self.approved_lessons = approved_lessons or []
-
     def create_analysis_job(
         self,
         request: ExternalAnalysisRequest,
         mock_mode: bool = False,
         custom_mock_response: Optional[Dict[str, Any]] = None,
+        run_immediately: bool = True,
     ) -> ExternalAnalysisJobDTO:
-        """Creates analysis job, enforces causal 6h history, calls model, and persists immutable record."""
-        # 1. Fetch snapshot metadata from DB
+        """Creates an analysis job and sets initial state to PREPARING_FEED."""
         snap_rec = self.snapshot_repo.get_by_id(request.snapshot_id)
         if not snap_rec:
             raise ValueError(f"Snapshot with ID '{request.snapshot_id}' not found.")
 
-        # 2. Load candles from snapshot storage
         candles = self.snapshot_storage.load_snapshot(Path(snap_rec.file_path))
         if not candles:
             raise ValueError(f"Snapshot data file for '{request.snapshot_id}' is empty or unreadable.")
@@ -70,16 +80,15 @@ class ExternalAnalysisService:
         job_id = str(uuid.uuid4())
         now_dt = datetime.now(timezone.utc)
 
-        # 3. Causal 6h window extraction (Fail-closed before API call)
+        # Pre-flight check: Causal 6h window extraction fails closed before provider calls
         try:
-            window_candles = extract_causal_window(
+            extract_causal_window(
                 candles=candles,
                 t_ms=request.prediction_time_t_ms,
                 window_hours=6.0,
             )
         except InsufficientHistoryError as e:
             logger.info("Insufficient history for t=%s: %s", request.prediction_time_t_ms, e)
-            # Persist INSUFFICIENT_HISTORY job WITHOUT calling model API (Zero cost incurred)
             job = ExternalAnalysisJobModel(
                 id=job_id,
                 snapshot_id=snap_rec.id,
@@ -99,50 +108,7 @@ class ExternalAnalysisService:
             self.job_repo.save(job)
             return self._model_to_dto(job, leakage_banner=False)
 
-        # 4. Build context payload
-        if request.context_variant == ContextVariant.B:
-            context_payload = build_context_b(
-                candles=window_candles,
-                purchase_price_p=request.purchase_price_p,
-                snapshot_hash=snap_rec.sha256,
-            )
-        else:
-            context_payload = build_context_a(
-                candles=window_candles,
-                snapshot_hash=snap_rec.sha256,
-            )
-
-        # 5. Call model adapter
-        raw_output = self.gemini_adapter.analyze(
-            context_payload=context_payload,
-            approved_lessons=self.approved_lessons,
-            prompt_version="v1",
-            mock_mode=mock_mode,
-            mock_response=custom_mock_response,
-        )
-
-        # 6. Verify and sanitize model response
-        valid_candle_times = {c.open_time_ms for c in window_candles}
-        approved_lesson_ids = {l.get("id", "") for l in self.approved_lessons if "id" in l}
-
-        prediction = ExternalAnalysisVerifier.verify(
-            raw_payload=raw_output,
-            valid_candle_times=valid_candle_times,
-            approved_lesson_ids=approved_lesson_ids,
-            model_id=raw_output.get("model_id", "gemini-2.5-flash"),
-            prompt_version="v1",
-            key_index=raw_output.get("key_index"),
-            prompt_tokens=raw_output.get("prompt_tokens"),
-            completion_tokens=raw_output.get("completion_tokens"),
-            estimated_cost_usd=raw_output.get("estimated_cost_usd"),
-        )
-
-        final_status = AnalysisStatus.READY if prediction.direction != AnalysisDirection.ABSTAIN else AnalysisStatus.ABSTAIN
-
-        # Check leakage risk: if historical replay, model may have future knowledge
-        is_retrospective = (request.mode == AnalysisMode.RETROSPECTIVE)
-
-        # 7. Persist job in DB
+        # Initial job state: PREPARING_FEED
         job = ExternalAnalysisJobModel(
             id=job_id,
             snapshot_id=snap_rec.id,
@@ -155,24 +121,235 @@ class ExternalAnalysisService:
             mode=request.mode.value,
             context_variant=request.context_variant.value,
             prompt_version="v1",
-            model_id=prediction.model_id,
-            key_index=prediction.key_index,
-            status=final_status.value,
-            direction=prediction.direction.value,
-            rationale=prediction.rationale,
-            evidence_times_json=json.dumps(prediction.evidence_candle_times),
-            lesson_ids_json=json.dumps(prediction.lesson_ids),
-            raw_output_json=json.dumps(raw_output),
-            prompt_tokens=prediction.prompt_tokens,
-            completion_tokens=prediction.completion_tokens,
-            estimated_cost_usd=prediction.estimated_cost_usd,
+            model_id=self.gemini_adapter.model_name,
+            status=AnalysisStatus.PREPARING_FEED.value,
             is_revealed=False,
             created_at=now_dt,
             updated_at=now_dt,
         )
         self.job_repo.save(job)
-        return self._model_to_dto(job, leakage_banner=is_retrospective)
 
+        if run_immediately:
+            return self.run_pipeline(
+                job_id=job_id,
+                mock_mode=mock_mode,
+                custom_mock_response=custom_mock_response,
+            )
+
+        return self._model_to_dto(job, leakage_banner=(request.mode == AnalysisMode.RETROSPECTIVE))
+
+    def run_pipeline(
+        self,
+        job_id: str,
+        mock_mode: bool = False,
+        custom_mock_response: Optional[Dict[str, Any]] = None,
+    ) -> ExternalAnalysisJobDTO:
+        """Executes multi-stage orchestration pipeline: Feed -> Analyze -> Research -> Match -> Synthesize."""
+        job = self.job_repo.get_by_id(job_id)
+        if not job:
+            raise ValueError(f"Job '{job_id}' not found.")
+
+        snap_rec = self.snapshot_repo.get_by_id(job.snapshot_id)
+        if not snap_rec:
+            raise ValueError(f"Snapshot with ID '{job.snapshot_id}' not found.")
+
+        candles = self.snapshot_storage.load_snapshot(Path(snap_rec.file_path))
+        if not candles:
+            raise ValueError(f"Snapshot data file for '{job.snapshot_id}' is empty or unreadable.")
+
+        stages_records: List[Dict[str, Any]] = []
+
+        # -------------------------------------------------------------
+        # STAGE 1: PREPARING_FEED
+        # -------------------------------------------------------------
+        t0_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            feed_contract = build_feed_contract(
+                candles=candles,
+                snapshot_id=snap_rec.id,
+                snapshot_checksum=snap_rec.sha256,
+                prediction_time_t_ms=job.prediction_time_t_ms,
+                purchase_price_p=job.purchase_price_p,
+                horizon_minutes=job.horizon_minutes,
+            )
+        except InsufficientHistoryError as e:
+            job.status = AnalysisStatus.INSUFFICIENT_HISTORY.value
+            job.error_message = str(e)
+            self.job_repo.save(job)
+            return self._model_to_dto(job)
+
+        feed_dict = feed_contract_to_dict(feed_contract)
+        stages_records.append({
+            "stage_name": "PREPARING_FEED",
+            "role": "Data Provider (Python)",
+            "status": "COMPLETED",
+            "started_at_iso": t0_iso,
+            "ended_at_iso": datetime.now(timezone.utc).isoformat(),
+            "output_hash": feed_contract.feed_hash,
+        })
+
+        # -------------------------------------------------------------
+        # STAGE 2: ANALYZING (Preliminary hypothesis)
+        # -------------------------------------------------------------
+        job.status = AnalysisStatus.ANALYZING.value
+        self.job_repo.save(job)
+        t1_iso = datetime.now(timezone.utc).isoformat()
+
+        hyp_contract = self.gemini_adapter.analyze_preliminary(
+            feed_payload=feed_dict,
+            mock_mode=mock_mode,
+        )
+        hyp_dict = {
+            "hypothesis_id": hyp_contract.hypothesis_id,
+            "feed_id": hyp_contract.feed_id,
+            "feed_hash": hyp_contract.feed_hash,
+            "observations": [
+                {
+                    "claim_id": o.claim_id,
+                    "description": o.description,
+                    "feature_ids": o.feature_ids,
+                    "candle_ids": o.candle_ids,
+                }
+                for o in hyp_contract.observations
+            ],
+            "candidates": [
+                {
+                    "pattern_name": c.pattern_name,
+                    "candle_ids": c.candle_ids,
+                    "rationale": c.rationale,
+                    "unresolved_context": c.unresolved_context,
+                }
+                for c in hyp_contract.candidates
+            ],
+            "missing_information": hyp_contract.missing_information,
+            "questions_for_research": hyp_contract.questions_for_research,
+        }
+        stages_records.append({
+            "stage_name": "ANALYZING",
+            "role": "Preliminary Analyst (AI)",
+            "status": "COMPLETED",
+            "started_at_iso": t1_iso,
+            "ended_at_iso": datetime.now(timezone.utc).isoformat(),
+            "output_hash": hashlib.sha256(json.dumps(hyp_dict).encode("utf-8")).hexdigest()[:16],
+        })
+
+        # -------------------------------------------------------------
+        # STAGE 3: RESEARCHING (Grounded search)
+        # -------------------------------------------------------------
+        job.status = AnalysisStatus.RESEARCHING.value
+        self.job_repo.save(job)
+        t2_iso = datetime.now(timezone.utc).isoformat()
+
+        try:
+            res_contract = self.research_agent.conduct_job_research(
+                hypothesis=hyp_contract,
+                job_id=job.id,
+                feed_hash=feed_contract.feed_hash,
+                mock_mode=mock_mode,
+            )
+            res_dict = research_contract_to_dict(res_contract)
+            stages_records.append({
+                "stage_name": "RESEARCHING",
+                "role": "Research Agent (Google Search Grounding)",
+                "status": "COMPLETED",
+                "started_at_iso": t2_iso,
+                "ended_at_iso": datetime.now(timezone.utc).isoformat(),
+                "search_provider": res_contract.search_provider,
+                "queries_executed": res_contract.queries_executed,
+            })
+        except Exception as e:
+            logger.warning("Research stage encountered error for job %s: %s", job.id, e)
+            job.status = AnalysisStatus.RESEARCH_INCOMPLETE.value
+            job.error_message = f"Grounded research không hoàn tất: {e}"
+            self.job_repo.save(job)
+            return self._model_to_dto(job)
+
+        # -------------------------------------------------------------
+        # STAGE 4: MATCHING (Deterministic Python criteria diagnostics)
+        # -------------------------------------------------------------
+        job.status = AnalysisStatus.MATCHING.value
+        self.job_repo.save(job)
+        t3_iso = datetime.now(timezone.utc).isoformat()
+
+        # Sliced causal candles for diagnostics (zero future)
+        causal_candles = [
+            c for c in candles
+            if c.close_time_ms <= job.prediction_time_t_ms
+        ]
+        diagnostics = evaluate_pattern_diagnostics(
+            candles=causal_candles,
+            target_index=-1,
+            feed_hash=feed_contract.feed_hash,
+        )
+        diagnostics_dicts = [pattern_diagnostics_to_dict(d) for d in diagnostics]
+        stages_records.append({
+            "stage_name": "MATCHING",
+            "role": "Pattern Diagnostic Engine (Python)",
+            "status": "COMPLETED",
+            "started_at_iso": t3_iso,
+            "ended_at_iso": datetime.now(timezone.utc).isoformat(),
+            "patterns_checked": len(diagnostics_dicts),
+        })
+
+        # -------------------------------------------------------------
+        # STAGE 5: SYNTHESIZING (Report synthesis)
+        # -------------------------------------------------------------
+        job.status = AnalysisStatus.SYNTHESIZING.value
+        self.job_repo.save(job)
+        t4_iso = datetime.now(timezone.utc).isoformat()
+
+        report_payload = self.gemini_adapter.synthesize_evidence_report(
+            feed_dict=feed_dict,
+            hypothesis_dict=hyp_dict,
+            research_dict=res_dict,
+            diagnostics_list=diagnostics_dicts,
+            purchase_price_p=job.purchase_price_p,
+            mock_mode=mock_mode,
+            custom_mock=custom_mock_response,
+        )
+        stages_records.append({
+            "stage_name": "SYNTHESIZING",
+            "role": "Evidence Synthesizer (AI)",
+            "status": "COMPLETED",
+            "started_at_iso": t4_iso,
+            "ended_at_iso": datetime.now(timezone.utc).isoformat(),
+        })
+
+        direction_str = report_payload.get("direction", "ABSTAIN").strip().upper()
+        if direction_str not in ("UP", "DOWN", "ABSTAIN"):
+            direction_str = "ABSTAIN"
+
+        final_status = AnalysisStatus.READY if direction_str != "ABSTAIN" else AnalysisStatus.ABSTAIN
+
+        envelope = {
+            "protocol_version": "evidence-pipeline-v1",
+            "feed": feed_dict,
+            "stages": stages_records,
+            "hypothesis": hyp_dict,
+            "research": res_dict,
+            "diagnostics": diagnostics_dicts,
+            "report_sections": report_payload.get("sections", {}),
+            "final_direction": direction_str,
+            "probability_up": None,
+            "probability_down": None,
+        }
+
+        now_dt = datetime.now(timezone.utc)
+        job.status = final_status.value
+        job.direction = direction_str
+        job.rationale = report_payload.get("rationale", "")
+        job.evidence_times_json = json.dumps(report_payload.get("evidence_candle_times", []))
+        job.lesson_ids_json = json.dumps(report_payload.get("lesson_ids", []))
+        job.raw_output_json = json.dumps(report_payload)
+        job.evidence_envelope_json = json.dumps(envelope)
+        job.prompt_tokens = report_payload.get("prompt_tokens")
+        job.completion_tokens = report_payload.get("completion_tokens")
+        job.estimated_cost_usd = report_payload.get("estimated_cost_usd")
+        job.updated_at = now_dt
+        self.job_repo.save(job)
+
+        is_retrospective = (job.mode == "RETROSPECTIVE")
+        return self._model_to_dto(job, leakage_banner=is_retrospective)
     def record_user_vote(self, job_id: str, vote: str) -> ExternalAnalysisJobDTO:
         """Records isolated user vote (UP or DOWN). Never fed to model or training."""
         job = self.job_repo.get_by_id(job_id)
@@ -182,6 +359,10 @@ class ExternalAnalysisService:
         clean_vote = vote.strip().upper()
         if clean_vote not in ("UP", "DOWN"):
             raise ValueError(f"Invalid vote '{vote}'. Must be UP or DOWN.")
+        if job.user_vote is not None:
+            if job.user_vote == clean_vote:
+                return self._model_to_dto(job, leakage_banner=(job.mode == "RETROSPECTIVE"))
+            raise ValueError(f"Vote for job '{job_id}' is already locked to '{job.user_vote}' and cannot be changed.")
 
         job.user_vote = clean_vote
         self.job_repo.save(job)
@@ -192,6 +373,8 @@ class ExternalAnalysisService:
         job = self.job_repo.get_by_id(job_id)
         if not job:
             raise ValueError(f"Job '{job_id}' not found.")
+        if job.user_vote is None:
+            raise ValueError("Phải khóa dự đoán của bạn trước khi xem kết quả thực tế.")
 
         # Load snapshot candles to evaluate outcome
         snap_rec = self.snapshot_repo.get_by_id(job.snapshot_id)
@@ -250,6 +433,14 @@ class ExternalAnalysisService:
         """Converts DB model to DTO. Outcome is strictly None unless is_revealed is True."""
         evidence_times = json.loads(job.evidence_times_json) if job.evidence_times_json else []
         lesson_ids = json.loads(job.lesson_ids_json) if job.lesson_ids_json else []
+        envelope_data = None
+        stages_data = None
+        if job.evidence_envelope_json:
+            try:
+                envelope_data = json.loads(job.evidence_envelope_json)
+                stages_data = envelope_data.get("stages")
+            except Exception:
+                pass
 
         ai_pred = None
         if job.direction:
@@ -292,4 +483,6 @@ class ExternalAnalysisService:
             outcome_evaluated_at_ms=job.outcome_evaluated_at_ms if job.is_revealed else None,
             error_message=job.error_message,
             leakage_risk_banner=leakage_banner,
+            evidence_envelope=envelope_data,
+            stages=stages_data,
         )
