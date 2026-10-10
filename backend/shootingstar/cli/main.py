@@ -1,6 +1,7 @@
 """Command Line Interface for ShootingStar."""
 
 import argparse
+from datetime import datetime, timezone
 import logging
 import sys
 import uuid
@@ -36,7 +37,15 @@ def build_parser() -> argparse.ArgumentParser:
     pilot_parser.add_argument("--symbol", default="BTCUSDT", help="Trading pair symbol (default: BTCUSDT)")
     pilot_parser.add_argument("--timeframe", default="1m", choices=["1m", "5m"], help="Candle timeframe (default: 1m)")
     pilot_parser.add_argument("--days", type=int, default=30, help="Number of pilot days (default: 30)")
+    pilot_parser.add_argument("--start", help="Start time in ms or ISO format (e.g. 2024-03-01T00:00:00)")
+    pilot_parser.add_argument("--end", help="End time in ms or ISO format (e.g. 2024-04-30T23:59:59)")
 
+    # Command: fetch-history
+    hist_parser = subparsers.add_parser("fetch-history", help="Run bounded Binance Spot historical ingestion for an arbitrary date window")
+    hist_parser.add_argument("--symbol", default="BTCUSDT", help="Trading pair symbol (default: BTCUSDT)")
+    hist_parser.add_argument("--timeframe", default="1m", choices=["1m", "5m"], help="Candle timeframe (default: 1m)")
+    hist_parser.add_argument("--start", required=True, help="Start time in ms or ISO format (e.g. 2024-03-01T00:00:00)")
+    hist_parser.add_argument("--end", required=True, help="End time in ms or ISO format (e.g. 2024-04-30T23:59:59)")
     # Command: list-snapshots
     subparsers.add_parser("list-snapshots", help="List snapshots stored in PostgreSQL database")
 
@@ -61,10 +70,103 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser = subparsers.add_parser("serve", help="Launch the ShootingStar Research Platform web server")
     serve_parser.add_argument("--host", default="127.0.0.1", help="Host interface (default: 127.0.0.1)")
     serve_parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
+    serve_parser.add_argument("--reload", action="store_true", help="Enable auto-reload for development")
 
     return parser
 
 
+def parse_time_arg(val: str | None) -> int | None:
+    if not val:
+        return None
+    s = val.strip()
+    if s.isdigit():
+        return int(s)
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except ValueError as err:
+        raise argparse.ArgumentTypeError(
+            f"Invalid timestamp or ISO 8601 date format: '{val}'. Expected epoch milliseconds or ISO format (e.g. 2024-03-01T00:00:00Z)"
+        ) from err
+
+
+def _execute_ingestion(symbol: str, timeframe: str, days: int = 30, start_time_ms: int | None = None, end_time_ms: int | None = None) -> int:
+    window_desc = f"{days} days" if start_time_ms is None else f"{start_time_ms} -> {end_time_ms}"
+    print(f"=== Starting Binance Ingestion: {symbol} {timeframe} ({window_desc}) ===")
+    service = PilotIngestionService()
+    try:
+        result = service.run_pilot(
+            symbol=symbol,
+            timeframe_str=timeframe,
+            days=days,
+            start_time_ms=start_time_ms,
+            end_time_ms=end_time_ms,
+        )
+        report = result.report
+        print("\n=== Ingestion & Quality Report ===")
+        print(f"Symbol:               {report.symbol}")
+        print(f"Timeframe:            {report.timeframe}")
+        print(f"Expected intervals:   {report.total_expected_intervals}")
+        print(f"Received candles:     {report.total_received_candles}")
+        print(f"Valid candles:        {report.valid_candles_count}")
+        print(f"Missing intervals:    {report.missing_intervals_count}")
+        print(f"Duplicates:           {report.duplicate_candles_count}")
+        print(f"Coverage ratio:       {report.coverage_ratio * 100:.2f}%")
+        print(f"Pristine series:      {'YES' if report.is_pristine else 'NO (contains gaps/dups)'}")
+        print(f"Raw archive files:    {result.raw_files_count}")
+        print(f"Snapshot path:        {result.snapshot_path}")
+        print(f"Snapshot SHA-256:     {result.snapshot_sha256}")
+
+        # Persist to database
+        with get_db_session() as session:
+            run_repo = IngestionRunRepository(session)
+            snap_repo = SnapshotRepository(session)
+
+            run_id = str(uuid.uuid4())
+            db_run = IngestionRunModel(
+                id=run_id,
+                venue="BINANCE",
+                symbol=report.symbol,
+                timeframe=report.timeframe,
+                start_time_ms=report.start_time_ms,
+                end_time_ms=report.end_time_ms,
+                valid_candles_count=report.valid_candles_count,
+                missing_intervals_count=report.missing_intervals_count,
+                duplicate_candles_count=report.duplicate_candles_count,
+                coverage_ratio=report.coverage_ratio,
+                is_pristine=report.is_pristine,
+                raw_files_count=result.raw_files_count,
+            )
+            run_repo.save(db_run)
+
+            db_snap = SnapshotModel(
+                id=result.snapshot_sha256,
+                ingestion_run_id=run_id,
+                venue="BINANCE",
+                symbol=report.symbol,
+                timeframe=report.timeframe,
+                start_time_ms=report.start_time_ms,
+                end_time_ms=report.end_time_ms,
+                candle_count=report.valid_candles_count,
+                file_path=str(result.snapshot_path),
+                sha256=result.snapshot_sha256,
+            )
+            snap_repo.save(db_snap)
+            print(f"Database Record:      SAVED & COMMITTED (run_id={run_id[:8]}..., snapshot_id={result.snapshot_sha256[:8]}...)")
+
+        print("\n[NOTE] Historical snapshot verifies data quality only; it does NOT constitute model evaluation.")
+        return 0
+    except BinanceBannedError as e:
+        logger.critical("HALTING: %s", e)
+        return 2
+    except BinanceRateLimitError as e:
+        logger.error("Rate limit error: %s", e)
+        return 1
+    except Exception as e:
+        logger.error("Ingestion failed: %s", e)
+        return 1
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -79,77 +181,29 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "fetch-pilot":
-        print(f"=== Starting Binance Pilot Ingestion: {args.symbol} {args.timeframe} ({args.days} days) ===")
-        service = PilotIngestionService()
-        try:
-            result = service.run_pilot(
-                symbol=args.symbol,
-                timeframe_str=args.timeframe,
-                days=args.days,
-            )
-            report = result.report
-            print("\n=== Pilot Ingestion & Quality Report ===")
-            print(f"Symbol:               {report.symbol}")
-            print(f"Timeframe:            {report.timeframe}")
-            print(f"Expected intervals:   {report.total_expected_intervals}")
-            print(f"Received candles:     {report.total_received_candles}")
-            print(f"Valid candles:        {report.valid_candles_count}")
-            print(f"Missing intervals:    {report.missing_intervals_count}")
-            print(f"Duplicates:           {report.duplicate_candles_count}")
-            print(f"Coverage ratio:       {report.coverage_ratio * 100:.2f}%")
-            print(f"Pristine series:      {'YES' if report.is_pristine else 'NO (contains gaps/dups)'}")
-            print(f"Raw archive files:    {result.raw_files_count}")
-            print(f"Snapshot path:        {result.snapshot_path}")
-            print(f"Snapshot SHA-256:     {result.snapshot_sha256}")
+        start_ms = parse_time_arg(getattr(args, "start", None))
+        end_ms = parse_time_arg(getattr(args, "end", None))
+        return _execute_ingestion(
+            symbol=args.symbol,
+            timeframe=args.timeframe,
+            days=args.days,
+            start_time_ms=start_ms,
+            end_time_ms=end_ms,
+        )
 
-            # Persist to PostgreSQL
-            with get_db_session() as session:
-                run_repo = IngestionRunRepository(session)
-                snap_repo = SnapshotRepository(session)
-
-                run_id = str(uuid.uuid4())
-                db_run = IngestionRunModel(
-                    id=run_id,
-                    venue="BINANCE",
-                    symbol=report.symbol,
-                    timeframe=report.timeframe,
-                    start_time_ms=report.start_time_ms,
-                    end_time_ms=report.end_time_ms,
-                    valid_candles_count=report.valid_candles_count,
-                    missing_intervals_count=report.missing_intervals_count,
-                    duplicate_candles_count=report.duplicate_candles_count,
-                    coverage_ratio=report.coverage_ratio,
-                    is_pristine=report.is_pristine,
-                    raw_files_count=result.raw_files_count,
-                )
-                run_repo.save(db_run)
-
-                db_snap = SnapshotModel(
-                    id=result.snapshot_sha256,
-                    ingestion_run_id=run_id,
-                    venue="BINANCE",
-                    symbol=report.symbol,
-                    timeframe=report.timeframe,
-                    start_time_ms=report.start_time_ms,
-                    end_time_ms=report.end_time_ms,
-                    candle_count=report.valid_candles_count,
-                    file_path=str(result.snapshot_path),
-                    sha256=result.snapshot_sha256,
-                )
-                snap_repo.save(db_snap)
-                print(f"Database Record:      SAVED & COMMITTED in PostgreSQL (run_id={run_id[:8]}..., snapshot_id={result.snapshot_sha256[:8]}...)")
-
-            print("\n[NOTE] 30-day pilot verifies data quality only; it does NOT constitute model evaluation.")
-            return 0
-        except BinanceBannedError as e:
-            logger.critical("HALTING: %s", e)
-            return 2
-        except BinanceRateLimitError as e:
-            logger.error("Rate limit error: %s", e)
+    if args.command == "fetch-history":
+        start_ms = parse_time_arg(args.start)
+        end_ms = parse_time_arg(args.end)
+        if start_ms is None or end_ms is None:
+            print("Error: Both --start and --end must be valid timestamps or ISO dates.")
             return 1
-        except Exception as e:
-            logger.error("Pilot ingestion failed: %s", e)
-            return 1
+        return _execute_ingestion(
+            symbol=args.symbol,
+            timeframe=args.timeframe,
+            days=0,
+            start_time_ms=start_ms,
+            end_time_ms=end_ms,
+        )
 
     if args.command == "list-snapshots":
         try:
@@ -307,12 +361,14 @@ def main(argv=None) -> int:
 
     if args.command == "serve":
         import uvicorn
-        from shootingstar.api.app import app
 
         print(f"Starting ShootingStar Research Platform on http://{args.host}:{args.port}")
-        uvicorn.run(app, host=args.host, port=args.port)
+        if getattr(args, "reload", False):
+            uvicorn.run("shootingstar.api.app:app", host=args.host, port=args.port, reload=True)
+        else:
+            from shootingstar.api.app import app
+            uvicorn.run(app, host=args.host, port=args.port)
         return 0
-    return 0
 
 
 if __name__ == "__main__":

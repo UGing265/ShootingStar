@@ -62,3 +62,9 @@ Mọi đầu việc lớn, phase nghiên cứu mới hoặc đợt tái cấu tr
    - Không tự ý commit hoặc push lên remote repository khi chưa có lệnh xác nhận từ người dùng.
 5. **Phong cách giao tiếp:**
    - Tiếng Việt, ngắn gọn, gãy gọn, tập trung thẳng vào giải pháp kỹ thuật và kết quả kiểm chứng.
+6. **Quy chuẩn Biểu đồ & Tương tác Chart (Charting Standards):**
+   - Mọi biểu đồ nến / chart tương tác bắt buộc phải hỗ trợ các tương tác cơ bản:
+     - **Cuộn chuột (Scroll / Wheel Up/Down):** Phóng to / thu nhỏ (Zoom in / Zoom out).
+     - **Kéo giữ chuột trái (Click & Hold / Drag):** Trượt qua lại (Pan left / right) để duyệt dữ liệu.
+     - **Click chọn mốc (Click Selection):** Phân biệt rõ thao tác kéo (drag) và nhấp chuột (click) bằng ngưỡng dịch chuyển chuột để không kích hoạt click ngoài ý muốn khi kéo.
+   - **Múi giờ chuẩn:** Giao diện hiển thị người dùng và biểu đồ mặc định thống nhất theo **UTC+7** (Asia/Ho_Chi_Minh); Backend API, Database và Parquet lưu trữ gốc theo mốc chuẩn UTC / epoch millisecond.

@@ -62,3 +62,15 @@ Các trang làm việc hiển thị kết quả đã lưu từ backend khi ngư�
 | `/signals` | Dự đoán | Những dự đoán đã ghi nhận cùng trạng thái chờ hoặc đã có kết quả. |
 | `/signals/[id]` | Chi tiết dự đoán | Thông tin và kết quả của một dự đoán. |
 | `/about` | Phương pháp | Cách hệ thống đánh giá và những giới hạn cần biết. |
+
+## 5. Cấu trúc Route Handlers & Components Nổi bật
+
+### 5.1 Route Handler `/api/snapshots/[id]/candles`
+- Tuyến đường Next.js server-side (`src/app/api/snapshots/[id]/candles/route.ts`) đóng vai trò proxy bảo mật chuyển tiếp yêu cầu từ trình duyệt đến backend FastAPI `/snapshots/{id}/candles`.
+- Nhận các query parameters: `start_ms`, `end_ms`, và `limit` (mặc định 500).
+- Ngăn chặn lộ địa chỉ nội bộ backend và hạn chế vấn đề CORS khi client tương tác với dữ liệu nến.
+
+### 5.2 Thành phần biểu đồ nến `CandlestickChart`
+- Nằm tại `src/features/data/candlestick-chart.tsx`, dựng biểu đồ nến tương tác thuần Canvas (zero heavy charting dependencies).
+- Hỗ trợ pan kéo thả chuột, phóng to/thu nhỏ (zoom), tooltip hiển thị chỉ số OHLCV khi hover, bảng chi tiết nến và công cụ nhảy nhanh theo khoảng thời gian (`start_ms` / `end_ms`).
+- Tích hợp trực tiếp trên trang `/data` để hiển thị trực quan các bộ nến Parquet đã đăng ký.

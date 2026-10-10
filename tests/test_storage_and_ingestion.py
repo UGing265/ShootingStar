@@ -219,3 +219,215 @@ def test_pilot_ingestion_requested_window_missing_edge_candles_detection(tmp_pat
     assert result.report.missing_intervals_count == 2
     assert result.report.is_pristine is False
     assert result.report.coverage_ratio == 0.60
+
+def test_snapshot_storage_load_snapshot_window(tmp_path: Path):
+    storage = SnapshotStorage(snapshots_dir=tmp_path)
+    base_time = 1700000000000
+    candles = [
+        Candle(
+            venue="BINANCE",
+            symbol="BTCUSDT",
+            timeframe="1m",
+            open_time_ms=base_time + i * 60000,
+            close_time_ms=base_time + (i + 1) * 60000 - 1,
+            open=50000.0 + i,
+            high=50010.0 + i,
+            low=49990.0 + i,
+            close=50005.0 + i,
+            volume=1.0 + i,
+            quote_volume=50000.0,
+            trades_count=10,
+            taker_buy_base_volume=0.5,
+            taker_buy_quote_volume=25000.0,
+        )
+        for i in range(10)
+    ]
+
+    snap_path, sha_hash = storage.save_snapshot(candles, "BINANCE", "BTCUSDT", "1m")
+    assert snap_path.exists()
+
+    # Test window with start and end
+    window = storage.load_snapshot_window(
+        snap_path,
+        start_ms=base_time + 2 * 60000,
+        end_ms=base_time + 5 * 60000 - 1,
+    )
+    assert len(window) == 3
+    assert window[0].open_time_ms == base_time + 2 * 60000
+    assert window[-1].open_time_ms == base_time + 4 * 60000
+
+    # Test limit
+    limited = storage.load_snapshot_window(
+        snap_path,
+        start_ms=base_time,
+        limit=2,
+    )
+    assert len(limited) == 2
+    assert limited[0].open_time_ms == base_time
+    assert limited[1].open_time_ms == base_time + 60000
+
+
+def test_cli_time_parsing():
+    from shootingstar.cli.main import parse_time_arg
+
+    assert parse_time_arg(None) is None
+    assert parse_time_arg("") is None
+    assert parse_time_arg("1700000000000") == 1700000000000
+    iso_ms = parse_time_arg("2024-03-01T00:00:00Z")
+    assert iso_ms == 1709251200000
+    iso_naive_ms = parse_time_arg("2024-03-01T00:00:00")
+    assert iso_naive_ms == 1709251200000
+
+
+def test_binance_client_418_ip_banned_halts_immediately():
+    from unittest.mock import MagicMock, patch
+    import httpx
+    from shootingstar.adapters.binance import BinanceSpotClient, BinanceBannedError
+
+    client = BinanceSpotClient(base_url="https://mock.binance.test")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 418
+    mock_resp.headers = {"x-mbx-used-weight-1m": "100"}
+
+    with patch("httpx.Client.get", return_value=mock_resp) as mock_get:
+        import pytest
+        with pytest.raises(BinanceBannedError, match="HTTP 418"):
+            client.fetch_klines_with_raw("BTCUSDT", "1m", start_time_ms=1700000000000)
+        # Must halt immediately without retrying
+        assert mock_get.call_count == 1
+
+
+def test_binance_client_429_retries_and_exhausts():
+    from unittest.mock import MagicMock, patch
+    import pytest
+    from shootingstar.adapters.binance import BinanceSpotClient, BinanceRateLimitError
+
+    client = BinanceSpotClient(base_url="https://mock.binance.test")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 429
+    mock_resp.headers = {"x-mbx-used-weight-1m": "1200", "Retry-After": "1"}
+
+    with patch("httpx.Client.get", return_value=mock_resp) as mock_get, \
+         patch("time.sleep") as mock_sleep:
+        with pytest.raises(BinanceRateLimitError, match="HTTP 429"):
+            client.fetch_klines_with_raw("BTCUSDT", "1m", start_time_ms=1700000000000)
+        assert mock_get.call_count == 3
+        assert mock_sleep.call_count == 2
+
+
+def test_binance_client_429_recovers_on_retry():
+    from unittest.mock import MagicMock, patch
+    import json
+    from shootingstar.adapters.binance import BinanceSpotClient
+
+    client = BinanceSpotClient(base_url="https://mock.binance.test")
+    mock_429 = MagicMock()
+    mock_429.status_code = 429
+    mock_429.headers = {"x-mbx-used-weight-1m": "1200", "Retry-After": "2"}
+
+    mock_200 = MagicMock()
+    mock_200.status_code = 200
+    mock_200.headers = {"x-mbx-used-weight-1m": "50"}
+    mock_rows = [[1700000000000, "100", "101", "99", "100.5", "10", 1700000059999, "1005", 10, "5", "502.5", "0"]]
+    mock_200.json.return_value = mock_rows
+    mock_200.content = json.dumps(mock_rows).encode("utf-8")
+    mock_200.raise_for_status.return_value = None
+
+    with patch("httpx.Client.get", side_effect=[mock_429, mock_200]) as mock_get, \
+         patch("time.sleep") as mock_sleep:
+        rows, raw_bytes, headers = client.fetch_klines_with_raw("BTCUSDT", "1m", start_time_ms=1700000000000)
+        assert len(rows) == 1
+        assert mock_get.call_count == 2
+        mock_sleep.assert_called_once_with(2)
+
+
+def test_preview_ingestion_non_persistent(tmp_path: Path):
+    from unittest.mock import MagicMock
+    from shootingstar.application.ingestion import preview_ingestion
+
+    base_time = 1700000000000
+    mock_rows = [
+        [base_time, "100.0", "105.0", "99.0", "102.0", "10.0", base_time + 59999, "1020.0", 10, "5.0", "510.0", "0"],
+        [base_time + 60000, "102.0", "106.0", "101.0", "104.0", "12.0", base_time + 119999, "1248.0", 12, "6.0", "624.0", "0"],
+    ]
+
+    mock_client = MagicMock()
+    mock_client.fetch_klines_with_raw.return_value = (mock_rows, b"[]", {})
+
+    candles, est_count, quality = preview_ingestion(
+        symbol="BTCUSDT",
+        timeframe="1m",
+        start_time_ms=base_time,
+        end_time_ms=base_time + 180000,
+        client=mock_client,
+        sample_limit=10,
+    )
+
+    assert len(candles) == 2
+    assert candles[0].open == 100.0
+    assert candles[1].close == 104.0
+    assert est_count >= 3
+    assert quality == "SAMPLE_OK_FULL_RANGE_UNCHECKED"
+    mock_client.fetch_klines_with_raw.assert_called_once()
+
+
+def test_snapshot_tampering_caught_by_direct_sha256(tmp_path: Path):
+    import hashlib
+    import os
+    from shootingstar.api.read_routes import _verify_snapshot_checksum
+
+    test_file = tmp_path / "tamper_test.bin"
+    original_bytes = b"abcdefghijklmnopqrstuvwxyz0123456789"
+    test_file.write_bytes(original_bytes)
+    orig_sha = hashlib.sha256(original_bytes).hexdigest()
+    orig_stat = test_file.stat()
+
+    assert _verify_snapshot_checksum(test_file, orig_sha) is True
+
+    # Tamper with content but keep exact same size and restore mtime
+    tampered_bytes = b"xbcdefghijklmnopqrstuvwxyz0123456789"
+    assert len(tampered_bytes) == len(original_bytes)
+    test_file.write_bytes(tampered_bytes)
+    os.utime(test_file, (orig_stat.st_atime, orig_stat.st_mtime))
+
+    # Must detect tampering immediately
+    assert _verify_snapshot_checksum(test_file, orig_sha) is False
+
+
+def test_binance_client_timeout_retries_and_exhausts():
+    from unittest.mock import MagicMock, patch
+    import httpx
+    import pytest
+    from shootingstar.adapters.binance import BinanceSpotClient, BinanceTimeoutError
+
+    client = BinanceSpotClient(base_url="https://mock.binance.test")
+
+    with patch("httpx.Client.get", side_effect=httpx.ReadTimeout("Connection read timed out")) as mock_get, \
+         patch("time.sleep") as mock_sleep:
+        with pytest.raises(BinanceTimeoutError, match="timed out after 3 attempts"):
+            client.fetch_klines_with_raw("BTCUSDT", "1m", start_time_ms=1700000000000)
+        assert mock_get.call_count == 3
+        assert mock_sleep.call_count == 2
+
+
+def test_binance_client_timeout_recovers_on_retry():
+    from unittest.mock import MagicMock, patch
+    import httpx
+    import json
+    from shootingstar.adapters.binance import BinanceSpotClient
+
+    client = BinanceSpotClient(base_url="https://mock.binance.test")
+    mock_200 = MagicMock()
+    mock_200.status_code = 200
+    mock_200.headers = {"x-mbx-used-weight-1m": "10"}
+    mock_rows = [[1700000000000, "100", "101", "99", "100.5", "10", 1700000059999, "1005", 10, "5", "502.5", "0"]]
+    mock_200.json.return_value = mock_rows
+    mock_200.content = json.dumps(mock_rows).encode("utf-8")
+    mock_200.raise_for_status.return_value = None
+
+    with patch("httpx.Client.get", side_effect=[httpx.ReadTimeout("timeout"), mock_200]) as mock_get, \
+         patch("time.sleep") as mock_sleep:
+        rows, _, _ = client.fetch_klines_with_raw("BTCUSDT", "1m", start_time_ms=1700000000000)
+        assert len(rows) == 1
+        assert mock_get.call_count == 2
+        mock_sleep.assert_called_once_with(1.0)

@@ -54,3 +54,23 @@ Run the full pytest suite (52+ tests verifying causal boundaries, latency gating
 ```powershell
 .venv\Scripts\python.exe -m pytest
 ```
+
+## 6. CLI Ingestion & Historical Replay
+
+In addition to running the web server, ShootingStar provides CLI tools for historical market data ingestion:
+
+```powershell
+# Run bounded Binance Spot historical ingestion for an arbitrary date window
+.venv\Scripts\python.exe -m shootingstar.cli.main fetch-history --symbol BTCUSDT --timeframe 1m --start 2024-03-01T00:00:00 --end 2024-03-31T23:59:59
+
+# Or pass millisecond Unix timestamps:
+.venv\Scripts\python.exe -m shootingstar.cli.main fetch-history --symbol BTCUSDT --timeframe 1m --start 1709251200000 --end 1711929599000
+```
+
+Options:
+- `--symbol`: Trading pair symbol (default: `BTCUSDT`).
+- `--timeframe`: Candle timeframe (`1m` or `5m`, default: `1m`).
+- `--start`: Start time in ISO 8601 string or Unix millisecond timestamp (required).
+- `--end`: End time in ISO 8601 string or Unix millisecond timestamp (required).
+
+Fetched candles are deduplicated, validated, registered in the database, and persisted into an immutable Parquet snapshot under `data/snapshots/`.

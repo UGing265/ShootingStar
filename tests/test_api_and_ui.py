@@ -264,6 +264,12 @@ def test_api_snapshot_candles_extraction_and_checksum_verification(client, db_se
         assert "close" in c0
         assert "volume" in c0
 
+        # Limit upper bound (up to 1500 accepted, > 1500 rejected with 422)
+        res_max = client.get(f"/snapshots/{snap_id}/candles?limit=1500")
+        assert res_max.status_code == 200
+        res_over = client.get(f"/snapshots/{snap_id}/candles?limit=1501")
+        assert res_over.status_code == 422
+
         # 2. Bounds validation start_ms > end_ms -> 422
         res_inv = client.get(f"/snapshots/{snap_id}/candles?start_ms=2000&end_ms=1000")
         assert res_inv.status_code == 422
@@ -697,3 +703,384 @@ def test_research_ui_manifesto_and_cost_gating(client):
     assert "ShootingStar Research Platform" in html
     assert "COST: UNAVAILABLE_PENDING_SLIPPAGE_METHOD" in html
     assert "Rule-Based Pattern Lab" in html
+
+
+def test_ingestion_jobs_validation(client):
+    # Missing preview_token -> 422
+    res_no_tok = client.post("/ingestion/jobs", json={
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "start_time_ms": 1000,
+        "end_time_ms": 2000,
+    })
+    assert res_no_tok.status_code == 422
+
+    # Invalid symbol
+    res = client.post("/ingestion/jobs", json={
+        "symbol": "ETHUSDT",
+        "timeframe": "1m",
+        "start_time_ms": 1000,
+        "end_time_ms": 2000,
+        "preview_token": "dummy_token",
+    })
+    assert res.status_code == 400
+    assert "Only BTCUSDT" in res.json()["detail"]
+
+    # Invalid timeframe
+    res = client.post("/ingestion/jobs", json={
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "start_time_ms": 1000,
+        "end_time_ms": 2000,
+        "preview_token": "dummy_token",
+    })
+    assert res.status_code == 400
+
+    # Inverted timestamps
+    res = client.post("/ingestion/jobs", json={
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "start_time_ms": 2000,
+        "end_time_ms": 1000,
+        "preview_token": "dummy_token",
+    })
+    assert res.status_code == 400
+
+    # Span > 65 days
+    res = client.post("/ingestion/jobs", json={
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "start_time_ms": 1000,
+        "end_time_ms": 1000 + (70 * 86400 * 1000),
+        "preview_token": "dummy_token",
+    })
+    assert res.status_code == 400
+    assert "Time range cannot exceed 65 days" in res.json()["detail"]
+
+def test_ingestion_job_lifecycle(client):
+    start_ms = 1704067200000  # 2024-01-01
+    end_ms = 1704153600000    # 2024-01-02
+
+    from shootingstar.api.ingestion_routes import preview_token_manager
+    tok1 = preview_token_manager.register_preview("BTCUSDT", "1m", start_ms, end_ms, 100)
+    tok2 = preview_token_manager.register_preview("BTCUSDT", "1m", start_ms, end_ms, 100)
+    tok3 = preview_token_manager.register_preview("BTCUSDT", "1m", start_ms, end_ms, 100)
+
+    with patch("shootingstar.api.ingestion_routes._run_ingestion_background") as mock_bg:
+        res = client.post("/ingestion/jobs", json={
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "start_time_ms": start_ms,
+            "end_time_ms": end_ms,
+            "preview_token": tok1,
+        })
+        assert res.status_code == 202
+        job = res.json()
+        job_id = job["job_id"]
+        assert job["status"] == "RUNNING"
+        assert job["symbol"] == "BTCUSDT"
+
+        # Concurrency 409 test
+        res_conflict = client.post("/ingestion/jobs", json={
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "start_time_ms": start_ms,
+            "end_time_ms": end_ms,
+            "preview_token": tok2,
+        })
+        assert res_conflict.status_code == 409
+
+        # GET by ID
+        res_get = client.get(f"/ingestion/jobs/{job_id}")
+        assert res_get.status_code == 200
+        assert res_get.json()["job_id"] == job_id
+
+        # List jobs
+        res_list = client.get("/ingestion/jobs")
+        assert res_list.status_code == 200
+        assert any(j["job_id"] == job_id for j in res_list.json())
+
+        # Simulate job completion
+        from shootingstar.api.ingestion_routes import job_manager
+        job_manager.update_job_success(
+            job_id=job_id,
+            snapshot_id="mock_snapshot_sha",
+            valid_candles_count=1440,
+            coverage_ratio=1.0,
+            is_pristine=True,
+        )
+
+        res_completed = client.get(f"/ingestion/jobs/{job_id}")
+        assert res_completed.status_code == 200
+        assert res_completed.json()["status"] == "COMPLETED"
+        assert res_completed.json()["snapshot_id"] == "mock_snapshot_sha"
+        assert res_completed.json()["valid_candles_count"] == 1440
+
+        # Now a new job can be submitted
+        res_new = client.post("/ingestion/jobs", json={
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "start_time_ms": start_ms,
+            "end_time_ms": end_ms,
+            "preview_token": tok3,
+        })
+        assert res_new.status_code == 202
+        # Cleanup
+        job_manager.update_job_success(res_new.json()["job_id"], "snap2", 1440, 1.0, True)
+
+
+def test_ingestion_preview_contract_and_non_persistence(client, db_session):
+    from unittest.mock import patch
+    from shootingstar.adapters.db.models import SnapshotModel
+
+    snap_count_before = db_session.query(SnapshotModel).count()
+
+    # Validation errors
+    res_bad = client.post("/ingestion/preview", json={
+        "symbol": "ETHUSDT",
+        "timeframe": "1m",
+        "start_time_ms": 1704067200000,
+        "end_time_ms": 1704153600000,
+    })
+    assert res_bad.status_code == 400
+
+    # Successful preview with mock klines
+    mock_rows = [
+        [1704067200000, "42000.0", "42100.0", "41900.0", "42050.0", "12.5", 1704067259999, "525000.0", 150, "6.0", "252000.0", "0"],
+        [1704067260000, "42050.0", "42150.0", "42000.0", "42100.0", "10.0", 1704067319999, "421000.0", 120, "5.0", "210500.0", "0"],
+    ]
+    with patch("shootingstar.adapters.binance.BinanceSpotClient.fetch_klines_with_raw", return_value=(mock_rows, b"[]", {})):
+        res = client.post("/ingestion/preview", json={
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "start_time_ms": 1704067200000,
+            "end_time_ms": 1704153600000,
+        })
+        assert res.status_code == 200
+        data = res.json()
+        assert data["symbol"] == "BTCUSDT"
+        assert data["timeframe"] == "1m"
+        assert data["estimated_candle_count"] > 0
+        assert data["sampled_candles_count"] == 2
+        assert len(data["sample_candles"]) == 2
+        assert data["sample_candles"][0]["open"] == 42000.0
+        assert data["preview_token"] != ""
+        assert data["quality_status"] == "SAMPLE_OK_FULL_RANGE_UNCHECKED"
+        assert data["is_bounded"] is True
+    # Assert no snapshot was persisted in DB
+    snap_count_after = db_session.query(SnapshotModel).count()
+    assert snap_count_after == snap_count_before
+
+
+def test_preview_token_validation_and_tamper_rejection(client):
+    from unittest.mock import patch
+    from shootingstar.api.ingestion_routes import job_manager
+
+    start_ms = 1704067200000
+    end_ms = 1704153600000
+
+    mock_rows = [
+        [start_ms, "42000.0", "42100.0", "41900.0", "42050.0", "12.5", start_ms + 59999, "525000.0", 150, "6.0", "252000.0", "0"],
+    ]
+
+    with patch("shootingstar.adapters.binance.BinanceSpotClient.fetch_klines_with_raw", return_value=(mock_rows, b"[]", {})):
+        res_prev = client.post("/ingestion/preview", json={
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "start_time_ms": start_ms,
+            "end_time_ms": end_ms,
+        })
+        assert res_prev.status_code == 200
+        token = res_prev.json()["preview_token"]
+
+    # 1. Tampered parameters with original token -> rejected with 400
+    res_tampered = client.post("/ingestion/jobs", json={
+        "symbol": "BTCUSDT",
+        "timeframe": "5m",
+        "start_time_ms": start_ms,
+        "end_time_ms": end_ms,
+        "preview_token": token,
+    })
+    assert res_tampered.status_code == 400
+    assert "Parameters were modified" in res_tampered.json()["detail"]
+
+    # 2. Non-existent token -> rejected with 400
+    res_fake = client.post("/ingestion/jobs", json={
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "start_time_ms": start_ms,
+        "end_time_ms": end_ms,
+        "preview_token": "non_existent_token_12345",
+    })
+    assert res_fake.status_code == 400
+    assert "invalid or expired" in res_fake.json()["detail"]
+
+    # 3. Matching parameters with token -> accepted (202)
+    with patch("shootingstar.api.ingestion_routes._run_ingestion_background"):
+        res_ok = client.post("/ingestion/jobs", json={
+            "symbol": "BTCUSDT",
+            "timeframe": "1m",
+            "start_time_ms": start_ms,
+            "end_time_ms": end_ms,
+            "preview_token": token,
+        })
+        assert res_ok.status_code == 202
+        job_manager.update_job_success(res_ok.json()["job_id"], "snap_test", 1440, 1.0, True)
+
+
+def test_api_snapshot_disk_tampering_detection(client, db_session, tmp_path):
+    import os
+    from shootingstar.adapters.db.models import SnapshotModel
+    from shootingstar.adapters.storage import SnapshotStorage
+    from shootingstar.domain.models import Candle
+
+    storage = SnapshotStorage(snapshots_dir=tmp_path)
+    candle = Candle(
+        venue="BINANCE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        open_time_ms=1704067200000,
+        close_time_ms=1704067259999,
+        open=42000.0,
+        high=42100.0,
+        low=41900.0,
+        close=42050.0,
+        volume=10.0,
+        quote_volume=420000.0,
+        trades_count=100,
+        taker_buy_base_volume=5.0,
+        taker_buy_quote_volume=210000.0,
+        observed_ingested_at_ms=1704067261000,
+    )
+    snap_file, orig_sha = storage.save_snapshot([candle], "BINANCE", "BTCUSDT", "1m")
+    orig_stat = snap_file.stat()
+    snap_id = "test_tamper_snap_" + uuid.uuid4().hex[:8]
+    snap = SnapshotModel(
+        id=snap_id,
+        venue="BINANCE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        start_time_ms=1704067200000,
+        end_time_ms=1704067259999,
+        candle_count=1,
+        file_path=str(snap_file),
+        sha256=orig_sha,
+    )
+    db_session.add(snap)
+    db_session.commit()
+
+    try:
+        # First extraction: valid
+        res = client.get(f"/snapshots/{snap_id}/candles")
+        assert res.status_code == 200
+        assert res.headers["X-Snapshot-Id"] == snap_id
+        assert res.headers["X-Snapshot-Sha256"] == orig_sha
+
+        # Now tamper with file on disk while keeping exact file size and restoring mtime
+        raw_bytes = bytearray(snap_file.read_bytes())
+        raw_bytes[10] = (raw_bytes[10] + 1) % 256
+        snap_file.write_bytes(bytes(raw_bytes))
+        os.utime(snap_file, (orig_stat.st_atime, orig_stat.st_mtime))
+
+        # Second extraction: MUST fail with 422 Checksum mismatch
+        res_tampered = client.get(f"/snapshots/{snap_id}/candles")
+        assert res_tampered.status_code == 422
+        assert "checksum mismatch" in res_tampered.json()["detail"].lower()
+    finally:
+        db_session.delete(snap)
+        db_session.commit()
+
+
+def test_simulation_api_endpoints_workflow(client, db_session, tmp_path):
+    from shootingstar.adapters.db.models import SnapshotModel
+    from shootingstar.adapters.storage import SnapshotStorage
+    from shootingstar.domain.models import Candle
+
+    # Create 50 candles
+    candles = []
+    base_time = 1704067200000
+    for i in range(50):
+        open_t = base_time + (i * 300000)
+        close_t = open_t + 299999
+        c_open = 42000.0
+        c_close = 42050.0 + (i * 10.0)
+        c_high = max(c_open, c_close) + 50.0
+        c_low = min(c_open, c_close) - 50.0
+        candles.append(
+            Candle(
+                venue="BINANCE",
+                symbol="BTCUSDT",
+                timeframe="5m",
+                open_time_ms=open_t,
+                close_time_ms=close_t,
+                open=c_open,
+                high=c_high,
+                low=c_low,
+                close=c_close,
+                volume=10.0,
+                quote_volume=420000.0,
+                trades_count=100,
+                taker_buy_base_volume=5.0,
+                taker_buy_quote_volume=210000.0,
+                observed_ingested_at_ms=close_t + 1000,
+            )
+        )
+    storage = SnapshotStorage(snapshots_dir=tmp_path)
+    snap_file, orig_sha = storage.save_snapshot(candles, "BINANCE", "BTCUSDT", "5m")
+
+    snap_id = "test_sim_snap_" + uuid.uuid4().hex[:8]
+    snap = SnapshotModel(
+        id=snap_id,
+        venue="BINANCE",
+        symbol="BTCUSDT",
+        timeframe="5m",
+        start_time_ms=candles[0].open_time_ms,
+        end_time_ms=candles[-1].close_time_ms,
+        candle_count=len(candles),
+        file_path=str(snap_file),
+        sha256=orig_sha,
+    )
+    db_session.add(snap)
+    db_session.commit()
+
+    try:
+        buy_t = candles[20].close_time_ms
+        # 1. Create simulation job
+        res_create = client.post("/replay/jobs", json={
+            "snapshot_id": snap_id,
+            "buy_time_ms": buy_t,
+            "buy_price": 42200.0,
+            "horizon_minutes": 30,
+        })
+        assert res_create.status_code == 201
+        job_data = res_create.json()
+        job_id = job_data["job_id"]
+        assert job_data["status"] == "AI_PREDICTED"
+        assert job_data["outcome"] is None  # Zero-lookahead: outcome must be null
+
+        # 2. Get simulation job
+        res_get = client.get(f"/replay/jobs/{job_id}")
+        assert res_get.status_code == 200
+        assert res_get.json()["outcome"] is None
+
+        # 3. User Vote
+        res_vote = client.post(f"/replay/jobs/{job_id}/vote", json={
+            "user_direction": "UP",
+        })
+        assert res_vote.status_code == 200
+        voted_data = res_vote.json()
+        assert voted_data["status"] == "VOTED"
+        assert voted_data["user_vote"]["user_direction"] == "UP"
+        assert voted_data["outcome"] is None
+
+        # 4. Reveal outcome
+        res_reveal = client.post(f"/replay/jobs/{job_id}/reveal")
+        assert res_reveal.status_code == 200
+        revealed_data = res_reveal.json()
+        assert revealed_data["status"] == "REVEALED"
+        assert revealed_data["outcome"] is not None
+        assert revealed_data["outcome"]["status"] == "EVALUATED"
+        assert isinstance(revealed_data["outcome"]["user_is_correct"], bool)
+    finally:
+        db_session.delete(snap)
+        db_session.commit()

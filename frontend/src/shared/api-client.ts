@@ -54,3 +54,42 @@ export async function fetchFromApi<T>(
     return { data: null, error: message, status: 503 };
   }
 }
+
+export async function postToApi<T>(
+  path: string,
+  body: unknown
+): Promise<ApiResult<T>> {
+  const baseUrl = process.env.SHOOTINGSTAR_API_URL || 'http://127.0.0.1:8000';
+  const url = new URL(path.startsWith('/') ? path : `/${path}`, baseUrl);
+
+  try {
+    const res = await fetch(url.toString(), {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      let errorMsg = `API responded with HTTP ${res.status}`;
+      try {
+        const errBody = await res.json();
+        if (errBody.detail) {
+          errorMsg = typeof errBody.detail === 'string' ? errBody.detail : JSON.stringify(errBody.detail);
+        }
+      } catch {
+        // Fallback
+      }
+      return { data: null, error: errorMsg, status: res.status };
+    }
+
+    const data = (await res.json()) as T;
+    return { data, error: null, status: res.status };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to connect to backend';
+    return { data: null, error: message, status: 503 };
+  }
+}

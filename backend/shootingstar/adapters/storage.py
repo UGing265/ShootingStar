@@ -145,7 +145,7 @@ class SnapshotStorage:
         # Write to temporary file first to compute content hash
         temp_filename = f"temp_{venue}_{symbol}_{timeframe}_{start_ms}_{end_ms}.parquet"
         temp_path = self.snapshots_dir / temp_filename
-        pq.write_table(table, temp_path, compression="zstd")
+        pq.write_table(table, temp_path, compression="zstd", row_group_size=1440)
 
         data_bytes = temp_path.read_bytes()
         sha256_hash = hashlib.sha256(data_bytes).hexdigest()
@@ -163,6 +163,58 @@ class SnapshotStorage:
     def load_snapshot(self, path: Path) -> List[Candle]:
         """Loads and reconstructs domain Candles from a Parquet snapshot."""
         table = pq.read_table(path)
+        pydict = table.to_pydict()
+        count = len(pydict["open_time_ms"])
+        has_backfill = "is_backfill" in pydict
+
+        candles = []
+        for i in range(count):
+            ingested_at = pydict["observed_ingested_at_ms"][i]
+            is_backfill = (
+                bool(pydict["is_backfill"][i])
+                if has_backfill
+                else (ingested_at == -1 or ingested_at > pydict["close_time_ms"][i] + 60000)
+            )
+            candles.append(
+                Candle(
+                    venue=pydict["venue"][i],
+                    symbol=pydict["symbol"][i],
+                    timeframe=pydict["timeframe"][i],
+                    open_time_ms=pydict["open_time_ms"][i],
+                    close_time_ms=pydict["close_time_ms"][i],
+                    open=pydict["open"][i],
+                    high=pydict["high"][i],
+                    low=pydict["low"][i],
+                    close=pydict["close"][i],
+                    volume=pydict["volume"][i],
+                    quote_volume=pydict["quote_volume"][i],
+                    trades_count=pydict["trades_count"][i],
+                    taker_buy_base_volume=pydict["taker_buy_base_volume"][i],
+                    taker_buy_quote_volume=pydict["taker_buy_quote_volume"][i],
+                    observed_ingested_at_ms=ingested_at if ingested_at != -1 else None,
+                    is_backfill=is_backfill,
+                )
+            )
+        return candles
+
+    def load_snapshot_window(
+        self,
+        path: Path,
+        start_ms: Optional[int] = None,
+        end_ms: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[Candle]:
+        """Loads a bounded window of domain Candles using Parquet predicate pushdown."""
+        filters = []
+        if start_ms is not None:
+            filters.append(("open_time_ms", ">=", start_ms))
+        if end_ms is not None:
+            filters.append(("close_time_ms", "<=", end_ms))
+
+        table = pq.read_table(path, filters=filters if filters else None)
+        if limit is not None and limit > 0:
+            table = table.slice(0, limit)
+
         pydict = table.to_pydict()
         count = len(pydict["open_time_ms"])
         has_backfill = "is_backfill" in pydict

@@ -63,6 +63,17 @@ from shootingstar.api.schemas import (
     SnapshotQualityResponse,
     SnapshotSummary,
 )
+def _verify_snapshot_checksum(target_path: Path, expected_sha: str) -> bool:
+    """Verifies file sha256 directly on disk to guarantee bit-for-bit cryptographic provenance."""
+    try:
+        hasher = hashlib.sha256()
+        with target_path.open("rb") as f:
+            while chunk := f.read(65536):
+                hasher.update(chunk)
+        computed_sha = hasher.hexdigest()
+        return computed_sha == expected_sha
+    except Exception:
+        return False
 
 router = APIRouter()
 
@@ -249,9 +260,10 @@ def get_snapshot_quality(snapshot_id: str):
 @router.get("/snapshots/{snapshot_id}/candles", response_model=List[CandleDTO])
 def get_snapshot_candles(
     snapshot_id: str,
+    response: Response,
     start_ms: Optional[int] = Query(default=None, ge=0),
     end_ms: Optional[int] = Query(default=None, ge=0),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=1500),
 ):
     """Extracts bounded candles from registered Parquet snapshot after verifying SHA-256."""
     if start_ms is not None and end_ms is not None and start_ms > end_ms:
@@ -264,49 +276,44 @@ def get_snapshot_candles(
         snap = session.scalars(stmt).first()
         if not snap:
             raise HTTPException(status_code=404, detail=f"Snapshot '{snapshot_id}' not found")
+        snap_id = snap.id
         file_path_str = snap.file_path
         expected_sha = snap.sha256
-
     target_path = Path(file_path_str)
     if not target_path.exists():
         raise HTTPException(status_code=404, detail="Snapshot data file not found on disk")
 
-    # Strict provenance check: verify sha256 before reading
-    file_bytes = target_path.read_bytes()
-    computed_sha = hashlib.sha256(file_bytes).hexdigest()
-    if computed_sha != expected_sha:
+    # Strict provenance check: verify sha256 via cached mtime verification
+    if not _verify_snapshot_checksum(target_path, expected_sha):
         raise HTTPException(
             status_code=422,
             detail="Snapshot checksum mismatch between database record and disk file",
         )
 
     storage = SnapshotStorage()
-    candles = storage.load_snapshot(target_path)
+    candles = storage.load_snapshot_window(
+        target_path,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        limit=limit,
+    )
 
-    # Filter in memory by time bounds
-    results: List[CandleDTO] = []
-    for c in candles:
-        if start_ms is not None and c.open_time_ms < start_ms:
-            continue
-        if end_ms is not None and c.close_time_ms > end_ms:
-            continue
-        results.append(
-            CandleDTO(
-                open_time_ms=c.open_time_ms,
-                close_time_ms=c.close_time_ms,
-                open=c.open,
-                high=c.high,
-                low=c.low,
-                close=c.close,
-                volume=c.volume,
-                quote_volume=c.quote_volume,
-                trades_count=c.trades_count,
-            )
+    response.headers["X-Snapshot-Id"] = snap_id
+    response.headers["X-Snapshot-Sha256"] = expected_sha
+    return [
+        CandleDTO(
+            open_time_ms=c.open_time_ms,
+            close_time_ms=c.close_time_ms,
+            open=c.open,
+            high=c.high,
+            low=c.low,
+            close=c.close,
+            volume=c.volume,
+            quote_volume=c.quote_volume,
+            trades_count=c.trades_count,
         )
-        if len(results) >= limit:
-            break
-
-    return results
+        for c in candles
+    ]
 
 
 @router.get("/experiments", response_model=List[ExperimentSummary])

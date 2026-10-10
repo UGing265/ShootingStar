@@ -8,6 +8,8 @@ No fabricated profits, slippages, or fake claims.
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from shootingstar.api.read_routes import router as read_router
+from shootingstar.api.ingestion_routes import router as ingestion_router
+from shootingstar.api.replay_routes import router as replay_router
 
 app = FastAPI(
     title="ShootingStar Research Platform",
@@ -16,6 +18,8 @@ app = FastAPI(
 )
 
 app.include_router(read_router)
+app.include_router(ingestion_router)
+app.include_router(replay_router)
 @app.get("/", response_class=HTMLResponse)
 def get_research_ui():
     """Renders the evidence-first ShootingStar Research Platform Dashboard."""
