@@ -63,6 +63,26 @@ from shootingstar.api.schemas import (
     SnapshotQualityResponse,
     SnapshotSummary,
 )
+def _resolve_snapshot_file_path(file_path_str: str) -> Optional[Path]:
+    """Resolves snapshot file path robustly against cwd, repo root, and backend dir."""
+    if not file_path_str:
+        return None
+    p = Path(file_path_str)
+    # Absolute paths must be resolved strictly; never fall through if missing
+    if p.is_absolute():
+        return p if p.exists() else None
+    if p.exists():
+        return p.resolve()
+    repo_root = Path(__file__).resolve().parents[3]
+    candidate = repo_root / p
+    if candidate.exists():
+        return candidate.resolve()
+    backend_dir = repo_root / "backend"
+    candidate = backend_dir / p
+    if candidate.exists():
+        return candidate.resolve()
+    return None
+
 def _verify_snapshot_checksum(target_path: Path, expected_sha: str) -> bool:
     """Verifies file sha256 directly on disk to guarantee bit-for-bit cryptographic provenance."""
     try:
@@ -279,9 +299,10 @@ def get_snapshot_candles(
         snap_id = snap.id
         file_path_str = snap.file_path
         expected_sha = snap.sha256
-    target_path = Path(file_path_str)
-    if not target_path.exists():
+    resolved_path = _resolve_snapshot_file_path(file_path_str)
+    if not resolved_path or not resolved_path.exists():
         raise HTTPException(status_code=404, detail="Snapshot data file not found on disk")
+    target_path = resolved_path
 
     # Strict provenance check: verify sha256 via cached mtime verification
     if not _verify_snapshot_checksum(target_path, expected_sha):
@@ -582,9 +603,10 @@ def get_patterns(snapshot_id: Optional[str] = None):
         snap_id = snap.id
         snap_sha256 = snap.sha256
 
-    target_path = Path(target_file_path)
-    if not target_path.exists():
+    resolved_path = _resolve_snapshot_file_path(target_file_path)
+    if not resolved_path or not resolved_path.exists():
         raise HTTPException(status_code=404, detail="Snapshot data file not found on disk")
+    target_path = resolved_path
 
     # Security & provenance invariant: verify SHA-256 before processing
     file_bytes = target_path.read_bytes()

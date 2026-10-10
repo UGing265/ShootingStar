@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -268,9 +269,163 @@ class PatternHitModel(Base):
 class AuditLogModel(Base):
     __tablename__ = "audit_logs"
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     entity_type = Column(String(64), nullable=False, index=True)
     entity_id = Column(String(64), nullable=False, index=True)
     action = Column(String(64), nullable=False)
     details_json = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class ExternalAnalysisJobModel(Base):
+    __tablename__ = "external_analysis_jobs"
+
+    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    snapshot_id = Column(String(64), nullable=False, index=True)
+    snapshot_hash = Column(String(64), nullable=False)
+    symbol = Column(String(32), nullable=False, default="BTCUSDT")
+    timeframe = Column(String(16), nullable=False)
+    prediction_time_t_ms = Column(BigInteger, nullable=False, index=True)
+    purchase_price_p = Column(Float, nullable=False)
+    horizon_minutes = Column(Integer, nullable=False, default=30)
+    mode = Column(String(32), nullable=False, default="RETROSPECTIVE")
+    context_variant = Column(String(16), nullable=False, default="A")
+    prompt_version = Column(String(32), nullable=False, default="v1")
+    model_id = Column(String(64), nullable=False, default="gemini-2.5-flash")
+    key_index = Column(Integer, nullable=True)
+    status = Column(String(32), nullable=False, default="PREPARING", index=True)
+
+    direction = Column(String(16), nullable=True)
+    rationale = Column(Text, nullable=True)
+    evidence_times_json = Column(Text, nullable=True)
+    lesson_ids_json = Column(Text, nullable=True)
+    raw_output_json = Column(Text, nullable=True)
+    evidence_envelope_json = Column(Text, nullable=True)
+
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    estimated_cost_usd = Column(Float, nullable=True)
+
+    user_vote = Column(String(16), nullable=True)
+
+    target_price = Column(Float, nullable=True)
+    outcome = Column(String(32), nullable=True)
+    is_revealed = Column(Boolean, nullable=False, default=False)
+    outcome_evaluated_at_ms = Column(BigInteger, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class LessonModel(Base):
+    __tablename__ = "lessons"
+
+    id = Column(String(64), primary_key=True)
+    title = Column(String(255), nullable=False)
+    source_name = Column(String(255), nullable=False)
+    source_url = Column(Text, nullable=False)
+    status = Column(String(32), nullable=False, default="PENDING", index=True)
+    current_revision_id = Column(String(64), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class LessonRevisionModel(Base):
+    __tablename__ = "lesson_revisions"
+
+    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    lesson_id = Column(String(64), ForeignKey("lessons.id"), nullable=False, index=True)
+    revision_number = Column(Integer, nullable=False, default=1)
+    short_definition = Column(Text, nullable=False)
+    caveats = Column(Text, nullable=False)
+    source_snippet = Column(Text, nullable=True)
+    reviewer = Column(String(128), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class LessonReviewEventModel(Base):
+    __tablename__ = "lesson_review_events"
+
+    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    lesson_id = Column(String(64), nullable=False, index=True)
+    revision_id = Column(String(64), nullable=True)
+    action = Column(String(32), nullable=False)  # SUBMITTED, APPROVED, REJECTED, EDITED
+    reviewer = Column(String(128), nullable=False)
+    reason = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class TradeWatchModel(Base):
+    __tablename__ = "trade_watches"
+
+    id = Column(String(64), primary_key=True)
+    operator_id = Column(String(64), nullable=False, index=True)
+    symbol = Column(String(32), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="WATCHING")
+    position_state = Column(String(32), nullable=False, default="FLAT")
+    strategy_version = Column(String(64), nullable=False)
+    risk_config_json = Column(Text, nullable=False)
+    symbol_filters_json = Column(Text, nullable=False)
+    active_candidate_id = Column(String(64), nullable=True)
+    execution_mode = Column(String(32), nullable=True)
+    opened_at_ms = Column(BigInteger, nullable=True)
+    deadline_ms = Column(BigInteger, nullable=True)
+    closed_at_ms = Column(BigInteger, nullable=True)
+    lease_owner = Column(String(128), nullable=True)
+    lease_expires_at_ms = Column(BigInteger, nullable=True)
+    lease_token = Column(String(64), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class CandidatePlanModel(Base):
+    __tablename__ = "candidate_plans"
+
+    id = Column(String(64), primary_key=True)
+    watch_id = Column(String(64), ForeignKey("trade_watches.id"), nullable=True, index=True)
+    strategy_version = Column(String(64), nullable=False)
+    rule_config_hash = Column(String(64), nullable=False)
+    decision_time_ms = Column(BigInteger, nullable=False)
+    available_cutoff_ms = Column(BigInteger, nullable=False)
+    entry_zone_json = Column(Text, nullable=False)
+    confirmation_json = Column(Text, nullable=False)
+    invalidation_json = Column(Text, nullable=False)
+    stop_price = Column(Numeric(20, 8), nullable=False)
+    target_price = Column(Numeric(20, 8), nullable=False)
+    wait_expires_at_ms = Column(BigInteger, nullable=False)
+    horizon_ms = Column(BigInteger, nullable=False, default=1800000)
+    probability_json = Column(Text, nullable=True)
+    reasons_json = Column(Text, nullable=True)
+    candidate_state = Column(String(32), nullable=False, default="WAITING")
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class TradeObservationModel(Base):
+    __tablename__ = "trade_observations"
+
+    id = Column(String(64), primary_key=True)
+    idempotency_key = Column(String(128), unique=True, nullable=False, index=True)
+    candidate_id = Column(String(64), nullable=False, index=True)
+    watch_id = Column(String(64), nullable=True, index=True)
+    observation_type = Column(String(16), nullable=False)  # ENTRY or EXIT
+    mode = Column(String(32), nullable=False)  # PAPER or MANUAL_REPORTED
+    price = Column(Numeric(20, 8), nullable=False)
+    quantity = Column(Numeric(20, 8), nullable=False)
+    remaining_quantity = Column(Numeric(20, 8), nullable=True)
+    fees_paid = Column(Numeric(20, 8), nullable=False)
+    actual_time_ms = Column(BigInteger, nullable=False)
+    receipt_time_ms = Column(BigInteger, nullable=False)
+    is_off_plan = Column(Boolean, nullable=False, default=False)
+    is_risk_breach = Column(Boolean, nullable=False, default=False)
+    reconciled_sl_breach = Column(Boolean, nullable=False, default=False)
+    exit_reason = Column(String(32), nullable=True)
+    realized_pnl_usdt = Column(Numeric(20, 8), nullable=True)
+    notes = Column(Text, nullable=True)
+
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)

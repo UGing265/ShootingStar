@@ -28,6 +28,37 @@ export interface SimulationOutcomeDTO {
   revealed_at_utc: string | null;
 }
 
+export interface StrategyEvaluationDTO {
+  strategy_version: string;
+  candidate_state: string;
+  decision: string;
+  reasons: string[];
+  proposed_entry: number | null;
+  zone_low?: number | null;
+  zone_high?: number | null;
+  target_price: number | null;
+  stop_price: number | null;
+  reward_risk_ratio: number | null;
+  support_level: number | null;
+  reclaim_level: number | null;
+  is_trade_eligible: boolean;
+}
+export interface StrategyOutcomeDTO {
+  trade_executed: boolean;
+  outcome?: 'TP_FIRST' | 'SL_FIRST' | 'TIMEOUT' | 'AMBIGUOUS' | 'CENSORED' | 'UNSCORABLE' | 'NO_TRADE' | 'UNFILLED';
+  entry_price?: number | null;
+  exit_price?: number | null;
+  entry_time_ms?: number | null;
+  exit_time_ms?: number | null;
+  gross_return_pct?: number | null;
+  net_return_pct?: number | null;
+  fee_rate_bps?: number | null;
+  slippage_bps?: number | null;
+  is_cost_gated?: boolean;
+  note?: string;
+  reason?: string;
+}
+
 export interface SimulationJobResponse {
   job_id: string;
   snapshot_id: string;
@@ -43,6 +74,8 @@ export interface SimulationJobResponse {
   ai_prediction: SimulationAIPredictionDTO | null;
   user_vote: SimulationUserVoteDTO | null;
   outcome: SimulationOutcomeDTO | null;
+  strategy_evaluation?: StrategyEvaluationDTO | null;
+  strategy_outcome?: StrategyOutcomeDTO | null;
 }
 
 export interface ReplayPredictionDTO {

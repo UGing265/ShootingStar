@@ -82,6 +82,8 @@ def _to_job_response(job: SimulationJob) -> SimulationJobResponse:
         ai_prediction=ai_dto,
         user_vote=user_dto,
         outcome=outcome_dto,
+        strategy_evaluation=job.strategy_evaluation,
+        strategy_outcome=job.strategy_outcome,
     )
 
 @router.post("/jobs", response_model=SimulationJobResponse, status_code=status.HTTP_201_CREATED)

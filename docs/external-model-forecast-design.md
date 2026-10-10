@@ -36,6 +36,19 @@ LLM thương mại có thể đã biết dữ liệu/sự kiện sau thời đi�
 5. **Quyền truy cập và chi phí:** Chỉ backend local/admin bật thử nghiệm ghi/có phí; cấu hình bí mật qua env, không ghi key trong DB/log/client. Giới hạn lượt gọi/ngân sách; lưu số token dùng thực tế. Kiểm tra điều khoản dữ liệu theo bậc dịch vụ: Gemini free/paid khác nhau [2][8], OpenAI mặc định không dùng dữ liệu API để train nhưng vẫn có retention [4]; chính sách Claude theo tính năng/hợp đồng. Không khẳng định zero retention nếu chưa cấu hình/kiểm tra.
 6. **Đánh giá chọn model:** Cố định phiên bản, prompt, schema, snapshot/window/horizon và tiêu chí trước thử; kiểm tra nhiều thời kỳ thị trường và so cùng baseline (ví dụ tỉ lệ đa số, luôn UP), báo số mẫu, tỷ lệ abstain, accuracy có định nghĩa, calibration nếu được kiểm định, latency và chi phí/lượt; không chọn model trên test rồi dùng test đó để tự tuyên bố thắng. Nếu không hơn baseline/không đủ dữ liệu: nói rõ không đủ cơ sở.
 
+### Nhiều Gemini key — vận hành, không né quota
+
+Có thể cấu hình **tối đa 10 key do người vận hành sở hữu** trong env/secret store ở backend; không ghi key vào DB, log, file docs hay frontend. Mỗi key gắn với project trong cấu hình BE để đối chiếu quota; không lưu giá trị key trong bản ghi prediction. Chọn key đang hoạt động theo vòng hoặc key chính/dự phòng; chỉ ghi key index và project alias nội bộ vào log quản trị (không vào public DTO), model ID, usage và chi phí. Key bị thu hồi/sai quyền được vô hiệu hóa và báo người vận hành; không thử đi thử lại vô hạn. Nếu không có key hợp lệ thì dừng với trạng thái chưa có API, không phát dự báo giả.
+
+**Giới hạn quan trọng:** [Google áp quota theo *project*, không theo API key](https://ai.google.dev/gemini-api/docs/rate-limits); 10 key trong cùng project **không cho thêm 10 lần RPM/TPM/RPD**. `429 RESOURCE_EXHAUSTED` theo project/billing → tôn trọng `Retry-After`/backoff và ngân sách, không quay sang key khác để né quota; nếu dự định phân bổ nhiều project phải xác minh điều khoản và giới hạn của từng project, không dùng rotation như cơ chế lách hạn mức. Mọi request phải có trần chi phí chung; lỗi không rõ request đã được tính phí thì không tự động gửi lại sang key khác. [Hướng dẫn quản lý key Gemini](https://ai.google.dev/gemini-api/docs/api-key).
+
+### Quyết định sản phẩm đã chốt để đưa vào kế hoạch
+
+- **Hai BE folder theo trách nhiệm:** tự train cũ giữ chức năng, chuyển sang `application/training/` khi migration callers hoàn chỉnh; nhánh gọi API riêng `application/external_analysis/`, adapter provider ở `adapters/model_api/`. Cùng dùng snapshot, Candle, outcome, không nhân bản logic hoặc cho vote người làm nhãn train.
+- **Input Gemini thử nghiệm 30m:** 6h nến `1m`/`5m` trước `t` (có thể là ngày trước nếu snapshot chứa, tuyệt đối không mượn nến sau `t`); kiểm checksum, available_at, gaps và lịch sử đủ. Thử context A toàn 6h OHLCV có thứ tự; B vài phép tính deterministic với công thức/source bars + đoạn nến cuối. Đây là cách trình bày dữ liệu, không phải huấn luyện hay “bằng chứng” dự báo. Bản nào hơn phải so bằng prospective đã khóa trước giá tương lai.
+- **Kiến thức trading và link:** agent nghiên cứu nguồn **offline**, đề xuất lesson với định nghĩa/rule text/caveat ngắn và URL; trang admin cho người duyệt/sửa/từ chối; DB lưu version/status/reviewer; Gemini chỉ nhận **bản đã duyệt** và trỏ `lesson_id` + timestamp nến, backend mới gắn URL. Không để Gemini tự đi tìm link lúc dự báo. Link giải thích khái niệm, không chứng nhận pattern dự báo đúng; verifier code chỉ kiểm hợp đồng/allowlist, không thể xác nhận mọi lời giải thích tự do.
+- **Hành trình UX:** Replay Điểm mua (UTC+7, 6h coverage, chart zoom/pan) → Nhận định Gemini thử nghiệm UP/DOWN/ABSTAIN và link học đã duyệt → Vote người riêng không cho AI học → Reveal `PENDING/UNSCORABLE/EVALUATED`. Snapshot cũ là **minh họa hồi cứu có nguy cơ model biết tương lai**; chỉ prospective khóa nhận định trước outcome mới đem so baseline. Admin review UI local/admin-only, không bắt sửa DB tay. Xem [plan chi tiết BE/FE/UX và 4 phase](plans/261010-external-model-api-research/plan.md).
+
 ## Tiêu chí để mở tính năng — chưa đạt
 
 - [ ] Có định nghĩa đầu vào/nhãn cho giá mua tùy ý, horizon và gap; không lẫn output API thử nghiệm với artifact Phase 02.
@@ -47,8 +60,7 @@ LLM thương mại có thể đã biết dữ liệu/sự kiện sau thời đi�
 ## Câu hỏi còn mở
 
 - Ngân sách API/lượt và chính sách gửi nến ra bên thứ ba có chấp nhận được không?
-- Muốn ưu tiên **nhận định tương lai có thể chấm công bằng** hay **minh họa hồi cứu** trước? Hai luồng phải ghi nhãn khác nhau.
-- Chốt quy tắc click giữa nến/gap, mốc `t+horizon`, độ dài cửa sổ đầu vào, từng horizon hợp lệ và tiêu chí chất lượng trước thử.
+- Chốt quy tắc click giữa nến/gap, giá chấm ở `t+30m`, ngưỡng lịch sử đủ 6h và mức phí/trần ngân sách trước khi chạy thật; timeframe 1m/5m, đầu vào 6h và horizon thử nghiệm đầu tiên 30m đã chọn.
 
 ## Nguồn (truy cập 2026-10-10)
 

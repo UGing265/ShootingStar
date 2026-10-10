@@ -4,7 +4,7 @@ description: "Preview rồi lưu snapshot; mô phỏng AI dự báo trước, ng
 status: in-progress
 priority: P1
 tags: [research, data, frontend, backend, replay]
-blockedBy: []
+blockedBy: [261010-replay-result-ux]
 blocks: []
 created: 2026-10-09
 ---
@@ -12,11 +12,15 @@ created: 2026-10-09
 
 > **IN-PROGRESS: Phase 01 thiếu preview; mô phỏng AI + người chưa nghiệm thu.** UX chính do người dùng xác nhận ngày 2026-10-09: preview → nạp snapshot → đánh dấu điểm mua → job AI → người chọn UP/DOWN (lưu/chấm riêng, **không mù** vì thấy AI trước) → chấm cả hai khi có giá thực tế. Không ép nghiên cứu so cửa sổ học 1/3/6/9 tháng; tua từng nến không phải luồng chính.
 
+**Cập nhật UX 2026-10-10 — đang chờ plan [Replay dễ đọc và kết quả tự mở](../261010-replay-result-ux/plan.md):** Phase 03 chưa thể nghiệm thu trước khi nhận định AI dễ hiểu, có preview biểu đồ ở nhận định/kết quả và lưu lựa chọn bước 3 xong tự mở bước 4. Chỉ dẫn cũ bên dưới yêu cầu bấm riêng “Xem kết quả” đã được thay; backend vẫn khóa vote và kiểm đủ nến trước reveal. Quan hệ blocked chỉ áp gate UX Phase 03, không dừng ingestion/model research; chưa triển khai trong lượt lập kế hoạch này.
+
 ## Mục tiêu và lời hứa trung thực
 
 Người dùng chọn BTCUSDT Spot, nến `1m` hoặc `5m`, khoảng lịch sử tùy chỉnh; xem Preview trước khi nạp chính thức, lưu nhiều snapshot có thể chọn lại. Ở khu mô phỏng, chọn snapshot, mốc ngày/giờ, giá BTC và horizon từ 30 phút tới tối đa một ngày; biểu đồ đặt **dấu chấm tại thời điểm/giá chọn** và **đường ngang giá đã nhập**. Job AI dự báo UP/DOWN, xác suất và bằng chứng/giới hạn giải thích; người dùng chọn UP/DOWN sau đó. Hai lựa chọn được lưu và chấm riêng, **không độc lập về thông tin**. Chưa có số liệu chứng minh độ chính xác. Ý nghĩa giá nhập và mốc so sánh phải chốt trước khi code.
 
 **Không phải** streaming giá hiện tại, tư vấn mua bán, giả lập khớp lệnh, ví tiền thật/ảo, giao dịch thật, P&L, hay chứng nhận model có edge. Khoản tiền ảo đã được nhắc khi brainstorm nhưng **chưa được chốt** là chức năng bước này; tách riêng khỏi replay dự đoán. Không có nút đẹp nhưng không chạy pipeline thật.
+
+**Phạm vi mới được chốt riêng:** [Điểm vào và TP/SL tối đa 30 phút](../261010-fast-entry-30m-strategy/plan.md) sở hữu public watcher và paper/manual strategy observations. Các exclusions của replay hướng giá vẫn đúng cho mode cũ; plan mới không biến giá nhập/vote/reveal thành fill, không thêm order API thật. Shadow labels tách khỏi dữ liệu mà decision được thấy.
 ### Luồng chính tách tab
 
 1. **Lịch sử / Preview:** custom khung ngày/giờ → Preview nến/khoảng/phạm vi thiếu và nguồn → xác nhận **Nạp chính thức** mới lưu snapshot bất biến; chọn lại được nhiều bản. Preview không âm thầm ghi bản nạp chính thức vào DB.

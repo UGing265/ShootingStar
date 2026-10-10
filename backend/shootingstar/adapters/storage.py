@@ -17,11 +17,13 @@ class StoragePaths:
     DATA_DIR = Path("data")
     RAW_DIR = DATA_DIR / "raw"
     SNAPSHOTS_DIR = DATA_DIR / "snapshots"
+    LITERATURE_DIR = DATA_DIR / "literature"
 
     @classmethod
     def ensure_directories(cls) -> None:
         cls.RAW_DIR.mkdir(parents=True, exist_ok=True)
         cls.SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+        cls.LITERATURE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class RawArchiveStorage:

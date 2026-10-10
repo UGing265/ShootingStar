@@ -8,6 +8,7 @@ const MAIN_NAV = [
   { href: '/dashboard', label: 'Tổng quan' },
   { href: '/data', label: 'Lịch sử giá' },
   { href: '/replay', label: 'Mô phỏng (Replay)' },
+  { href: '/lessons/review', label: 'Bài học trading' },
   { href: '/research', label: 'Kết quả thử nghiệm' },
   { href: '/patterns', label: 'Mẫu hình giá' },
   { href: '/signals', label: 'Dự đoán' },

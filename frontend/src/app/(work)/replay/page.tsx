@@ -1,12 +1,19 @@
 import React from 'react';
 import { fetchFromApi } from '@/shared/api-client';
-import { SnapshotSummary } from '@/features/data/types';
+import { CandleDTO, SnapshotSummary } from '@/features/data/types';
 import { ReplayPlayer } from '@/features/replay/replay-player';
 
 export default async function ReplayPage() {
   const result = await fetchFromApi<SnapshotSummary[]>('/snapshots');
   const snapshots = result.data || [];
 
+  let initialCandles: CandleDTO[] = [];
+  if (snapshots.length > 0) {
+    const candlesRes = await fetchFromApi<CandleDTO[]>(`/snapshots/${snapshots[0].id}/candles`, {
+      limit: 1000,
+    });
+    initialCandles = candlesRes.data || [];
+  }
   return (
     <div className="page-container" style={{ padding: '24px 32px' }}>
       <header className="page-header" style={{ marginBottom: 24 }}>
@@ -48,7 +55,7 @@ export default async function ReplayPage() {
           </a>
         </div>
       ) : (
-        <ReplayPlayer snapshots={snapshots} />
+        <ReplayPlayer snapshots={snapshots} initialCandles={initialCandles} />
       )}
     </div>
   );

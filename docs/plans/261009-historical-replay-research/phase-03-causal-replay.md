@@ -2,6 +2,8 @@
 
 **Trạng thái:** Chưa triển khai/chưa nghiệm thu. Xem [plan.md](plan.md). Đây là **luồng chính**; ý tưởng tua từng nến và con trỏ phiên cũ hoãn, không nằm trong gate phase này.
 
+**Yêu cầu UX mới (2026-10-10):** Theo [plan Replay dễ đọc](../261010-replay-result-ux/plan.md), sau khi lưu lựa chọn ở bước 3 thì tự chuyển bước 4 và tự gọi reveal; không bắt bấm “Xem kết quả” lần nữa. Bước 2 có chart lịch sử trước mua, bước 4 có chart đối chiếu khi đủ dữ liệu. Nội dung cũ nói bấm riêng bên dưới chỉ là lịch sử thiết kế; gate khóa vote/đủ nến và hạn chế model giữ nguyên. Phase này chưa nghiệm thu cho tới khi plan UX mới hoàn tất.
+
 ## Tab và hành trình
 
 1. **Điểm mua:** Người dùng chọn snapshot; **click/chạm biểu đồ để chọn mốc mua** (thời gian và giá quan sát tại điểm) **hoặc nhập ngày/giờ và giá thủ công**. Có thể sửa giá/mốc trước job; chart vẽ chấm tại tọa độ đã chọn và đường ngang giá mua giả định, giá nến thực tế hiển thị riêng nếu lệch. Chọn mốc thời lượng dự đoán hoặc nhập thời lượng trong khoảng 30 phút–tối đa một ngày. Không gọi đây là giá khớp lệnh.
