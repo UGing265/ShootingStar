@@ -2,7 +2,7 @@
 
 ## Context và trạng thái
 
-[Plan tổng](plan.md), [Chart](phase-02-chart-preview.md). **Pending; chưa đổi handler hoặc API.**
+[Plan tổng](plan.md), [Chart](phase-02-chart-preview.md). **Complete.** Đã sửa `handleVote` tự động chuyển `setActiveTab('step4')` và gọi ngay `handleRevealOutcome`, loại bỏ nút bấm kép. Backend đã khóa vote immutability (HTTP 409 khi đổi vote, idempotent khi gửi lại) và chặn reveal trước khi vote (HTTP 400).
 
 ## Nguyên nhân đã xác thực
 

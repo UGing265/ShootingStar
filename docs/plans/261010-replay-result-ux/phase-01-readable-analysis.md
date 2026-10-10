@@ -2,7 +2,7 @@
 
 ## Context và trạng thái
 
-[Plan tổng](plan.md), [Pipeline điều phối–nghiên cứu](../261010-agent-evidence-analysis/plan.md), [Chart](phase-02-chart-preview.md). **Pending / blocked phần report mới bởi plan pipeline. Chỉ lập kế hoạch.**
+[Plan tổng](plan.md), [Pipeline điều phối–nghiên cứu](../261010-agent-evidence-analysis/plan.md), [Chart](phase-02-chart-preview.md). **Complete.** Đã cải thiện nhận định AI bằng tiếng Việt rõ ràng, giải thích cụ thể mốc t (UTC+7), giá mua P, horizon 30m, cảnh báo thử nghiệm, cùng thông báo minh bạch cho các trạng thái NO_MODEL và ABSTAIN.
 
 Yêu cầu mới thay thiết kế ban đầu chỉ sửa rationale/prompt và giới hạn ba câu. **Không còn giới hạn ba câu, không lấy một agent trả kết luận ngắn làm đầu ra đã đủ.** Backend report/nguồn/criteria thuộc plan pipeline; phase này tích hợp hiển thị, không tạo một pipeline khác.
 

@@ -2,7 +2,7 @@
 
 ## Context và trạng thái
 
-[Plan tổng](plan.md), [Nhận định dễ đọc](phase-01-readable-analysis.md), [Tự mở kết quả](phase-03-auto-result.md). **Pending; chưa tạo component.**
+[Plan tổng](plan.md), [Nhận định dễ đọc](phase-01-readable-analysis.md), [Tự mở kết quả](phase-03-auto-result.md). **Complete.** Đã tạo `replay-chart.tsx`, tích hợp cho Bước 1, Bước 2 (che vùng tương lai t->t+horizon), và Bước 4 (mở vùng che, highlight khoảng 30m, đánh dấu điểm mua P và nến đối chiếu kết quả).
 
 ## Quyết định
 

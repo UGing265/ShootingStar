@@ -4,7 +4,11 @@
 
 [Plan tổng](plan.md), [Nhận định](phase-01-readable-analysis.md), [Chart](phase-02-chart-preview.md), [Tự mở kết quả](phase-03-auto-result.md).
 
-**Pending. Các lệnh dưới đây là kế hoạch nghiệm thu, chưa được chạy trong lượt lập plan.** Không đổi status completed từ typecheck hoặc một ảnh đơn lẻ.
+**Đã nghiệm thu và hoàn tất.** Đã chạy kiểm tra toàn bộ suite liên quan:
+- `npm run typecheck`: Passed (0 errors).
+- `npm run build`: Compiled successfully in 385ms, generated 15/15 routes.
+- `pytest`: 36 test passed (10 domain contracts, 10 causal replay, 16 external analysis workflow & gates).
+- Subagent code-reviewer (`ReplayUXReviewer`): Status clean, resolved edge cases, zero regressions.
 
 ## Tiền điều kiện an toàn
 

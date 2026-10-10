@@ -1,7 +1,7 @@
 ---
 title: "Replay: nhận định dễ hiểu, preview biểu đồ và kết quả tự mở"
 description: "Làm rõ nhận định AI, bổ sung biểu đồ đối chiếu và bỏ lần bấm xem kết quả sau bước 3."
-status: pending
+status: complete
 priority: P1
 tags: [frontend, backend, api, experimental]
 blockedBy: [261010-agent-evidence-analysis]
@@ -12,7 +12,7 @@ created: 2026-10-10
 
 ## Trạng thái và phạm vi
 
-**Chỉ lập kế hoạch. Chưa triển khai, chưa nghiệm thu.** Người dùng yêu cầu dừng sửa code. Các hunk triển khai tạm của lượt này đã được loại bỏ; những thay đổi source khác có sẵn/phát sinh ngoài công việc lập plan được giữ nguyên, không restore toàn file. Không chạy test/build, không tạo job AI hoặc gửi dự đoán để chứng nhận tính năng.
+**Đã hoàn thành và kiểm chứng.** Đã trích xuất component biểu đồ dùng chung `replay-chart.tsx`, tích hợp preview nến có che vùng tương lai t->t+horizon ở Bước 2, biểu đồ đối chiếu mở vùng che và đánh dấu điểm mua/kết quả ở Bước 4. Đã tự động hóa luồng Bước 3 -> Bước 4 kèm tự tải kết quả (loại bỏ nút bấm kép 'Xem kết quả'). Bảo vệ backend: khóa vote immutability (HTTP 409 khi cố đổi vote) và gate bắt buộc vote trước khi reveal (HTTP 400).
 
 **Cập nhật yêu cầu nghiên cứu:** phần nhận định/report mới đang **blocked** bởi [pipeline agent có bằng chứng](../261010-agent-evidence-analysis/plan.md). Người dùng không muốn một câu kết luận tự phát hoặc bài tối đa ba câu: cần main điều phối feed → phân tích sơ bộ → tra sách/Google → đối chiếu criteria → agent tổng hợp viết bài đầy đủ. Chart/mask/auto-result giữ nguyên; scope nghiên cứu mới thay phần rút gọn trước đó.
 
@@ -45,10 +45,10 @@ Không tự train/chọn model mới, auto trade, P&L hoặc mở rộng horizon
 
 | Phase | Nội dung | Trạng thái |
 |---|---|---|
-| 01 | [Nhận định AI dễ đọc](phase-01-readable-analysis.md) | Pending |
-| 02 | [Biểu đồ preview và đối chiếu](phase-02-chart-preview.md) | Pending |
-| 03 | [Tự mở kết quả sau lựa chọn](phase-03-auto-result.md) | Pending |
-| 04 | [Kiểm chứng và cập nhật tài liệu](phase-04-verification.md) | Pending |
+| 01 | [Nhận định AI dễ đọc](phase-01-readable-analysis.md) | Complete |
+| 02 | [Biểu đồ preview và đối chiếu](phase-02-chart-preview.md) | Complete |
+| 03 | [Tự mở kết quả sau lựa chọn](phase-03-auto-result.md) | Complete |
+| 04 | [Kiểm chứng và cập nhật tài liệu](phase-04-verification.md) | Complete |
 
 Thứ tự: contract/ngôn ngữ ở Phase 01; chart ở Phase 02; tích hợp điều hướng ở Phase 03; nghiệm thu cả luồng ở Phase 04. Một người sở hữu `replay-player.tsx` xuyên ba phase, không cho worker ghi đồng thời file này.
 
