@@ -10,6 +10,7 @@ from shootingstar.adapters.db.models import (
     CanonicalCandleModel,
     ExperimentModel,
     ExperimentSplitModel,
+    ExternalAnalysisJobModel,
     IngestionRunModel,
     LabelRecordModel,
     MetricReportModel,
@@ -21,6 +22,9 @@ from shootingstar.adapters.db.models import (
     SignalOutcomeModel,
     SignalPredictionModel,
     SnapshotModel,
+    LessonModel,
+    LessonRevisionModel,
+    LessonReviewEventModel,
 )
 
 
@@ -292,4 +296,62 @@ class PatternHitRepository:
 
     def get_hits_for_rule(self, rule_id: str) -> List[PatternHitModel]:
         stmt = select(PatternHitModel).where(PatternHitModel.rule_id == rule_id).order_by(PatternHitModel.detected_time_ms.asc())
+        return list(self.session.scalars(stmt).all())
+
+
+class ExternalAnalysisJobRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save(self, job: ExternalAnalysisJobModel) -> ExternalAnalysisJobModel:
+        self.session.add(job)
+        self.session.flush()
+        return job
+
+    def get_by_id(self, job_id: str) -> Optional[ExternalAnalysisJobModel]:
+        return self.session.get(ExternalAnalysisJobModel, job_id)
+
+    def list_jobs(self, limit: int = 20) -> List[ExternalAnalysisJobModel]:
+        stmt = select(ExternalAnalysisJobModel).order_by(ExternalAnalysisJobModel.created_at.desc()).limit(limit)
+        return list(self.session.scalars(stmt).all())
+
+
+class LessonRepository:
+    def __init__(self, session: Session):
+        self.session = session
+
+    def save_lesson(self, lesson: LessonModel) -> LessonModel:
+        self.session.add(lesson)
+        self.session.flush()
+        return lesson
+
+    def get_lesson(self, lesson_id: str) -> Optional[LessonModel]:
+        return self.session.get(LessonModel, lesson_id)
+
+    def list_lessons_by_status(self, status: Optional[str] = None) -> List[LessonModel]:
+        stmt = select(LessonModel)
+        if status:
+            stmt = stmt.where(LessonModel.status == status)
+        stmt = stmt.order_by(LessonModel.created_at.desc())
+        return list(self.session.scalars(stmt).all())
+
+    def save_revision(self, rev: LessonRevisionModel) -> LessonRevisionModel:
+        self.session.add(rev)
+        self.session.flush()
+        return rev
+
+    def get_revision(self, revision_id: str) -> Optional[LessonRevisionModel]:
+        return self.session.get(LessonRevisionModel, revision_id)
+
+    def list_revisions_for_lesson(self, lesson_id: str) -> List[LessonRevisionModel]:
+        stmt = select(LessonRevisionModel).where(LessonRevisionModel.lesson_id == lesson_id).order_by(LessonRevisionModel.revision_number.desc())
+        return list(self.session.scalars(stmt).all())
+
+    def save_review_event(self, event: LessonReviewEventModel) -> LessonReviewEventModel:
+        self.session.add(event)
+        self.session.flush()
+        return event
+
+    def list_review_events(self, lesson_id: str) -> List[LessonReviewEventModel]:
+        stmt = select(LessonReviewEventModel).where(LessonReviewEventModel.lesson_id == lesson_id).order_by(LessonReviewEventModel.created_at.desc())
         return list(self.session.scalars(stmt).all())

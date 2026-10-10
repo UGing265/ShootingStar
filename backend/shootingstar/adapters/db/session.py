@@ -15,7 +15,11 @@ def load_env_file() -> None:
     """Loads key-value pairs from .env into os.environ if present."""
     env_path = Path(".env")
     if not env_path.exists():
-        return
+        repo_env = Path(__file__).resolve().parents[4] / ".env"
+        if repo_env.is_file():
+            env_path = repo_env
+        else:
+            return
     for line in env_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):

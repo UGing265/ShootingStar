@@ -10,6 +10,18 @@ from sqlalchemy.orm import Session
 from shootingstar.adapters.db.session import get_database_url
 
 
+@pytest.fixture(scope="session", autouse=True)
+def enforce_test_database_isolation():
+    """Security invariant: Enforces test database URL across entire test suite to prevent prod DB pollution."""
+    test_url = get_database_url(test_mode=True)
+    orig_url = os.environ.get("SHOOTINGSTAR_DATABASE_URL")
+    os.environ["SHOOTINGSTAR_DATABASE_URL"] = test_url
+    yield
+    if orig_url is not None:
+        os.environ["SHOOTINGSTAR_DATABASE_URL"] = orig_url
+    else:
+        os.environ.pop("SHOOTINGSTAR_DATABASE_URL", None)
+
 @pytest.fixture(scope="session")
 def migrated_test_engine():
     """Ensures test database is fully migrated via Alembic, testing migration integrity."""

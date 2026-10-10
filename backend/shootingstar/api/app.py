@@ -10,6 +10,8 @@ from fastapi.responses import HTMLResponse
 from shootingstar.api.read_routes import router as read_router
 from shootingstar.api.ingestion_routes import router as ingestion_router
 from shootingstar.api.replay_routes import router as replay_router
+from shootingstar.api.external_routes import router as external_router
+from shootingstar.api.lesson_routes import router as lesson_router
 
 app = FastAPI(
     title="ShootingStar Research Platform",
@@ -20,6 +22,8 @@ app = FastAPI(
 app.include_router(read_router)
 app.include_router(ingestion_router)
 app.include_router(replay_router)
+app.include_router(external_router)
+app.include_router(lesson_router)
 @app.get("/", response_class=HTMLResponse)
 def get_research_ui():
     """Renders the evidence-first ShootingStar Research Platform Dashboard."""
