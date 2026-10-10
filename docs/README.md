@@ -10,6 +10,9 @@ ShootingStar is an evidence-first, local-first quantitative research platform fo
 - [Design Tokens & Guidelines](./DESIGN.md) — Apple-inspired UI design system, color palette, typography, and layout rules.
 - [Spot Trading Fees Reference](./binance-spot-fees.md) — Binance maker/taker fee structures and research considerations.
 - [External APIs](./external-apis.md) — Binance public market data endpoints and rate limit specifications.
+- [Nghiên cứu model API cho Replay](./external-model-forecast-design.md) — so sánh Gemini/OpenAI/Claude, rủi ro dữ liệu tương lai và thiết kế thử nghiệm chưa triển khai.
+- [Thiết kế tự train lưu tham khảo](./self-trained-model-design.md) — hướng cũ, chưa triển khai cho giá mua tùy ý.
+- [Kế hoạch nghiên cứu model API ngoài](./plans/261010-external-model-api-research/plan.md) — phases so sánh và thử tích hợp, chưa chạy.
 
 ---
 
