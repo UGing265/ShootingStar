@@ -1,25 +1,20 @@
-# Phase 01 — Đánh giá provider trước khi tích hợp
+# Phase 01 — Giao thức thử nghiệm và tách code train
 
-**Trạng thái:** PENDING; chỉ nghiên cứu tài liệu, chưa có kết quả thực nghiệm. [Kế hoạch](plan.md) · [Nguồn và lý do chọn ứng viên](../../external-model-forecast-design.md).
+**Trạng thái:** IN-PROGRESS (Refactor code training hoàn tất; gate hợp đồng/ngân sách chờ người vận hành cấp key). Hai việc riêng: chốt protocol/quyền/ngân sách **và** chuyển code training sau khi rà callers/tests, không xóa chức năng. Chưa cần log API hay kết luận model thắng. [Plan](plan.md) · [Nguồn nghiên cứu](../../external-model-forecast-design.md).
 
-## Mục tiêu
+## Mục tiêu và trách nhiệm
 
-Quyết định có đáng dùng API ngoài, chọn ứng viên để thử **theo dữ liệu đo**, không theo ấn tượng 'model mạnh'. Nghiên cứu hiện có cho thấy Gemini Flash, OpenAI và Claude đều hỗ trợ output có schema, không chứng minh ai dự báo BTCUSDT tốt hơn.
+1. Giữ nguyên pipeline tự train đang có, chỉ tách theo trách nhiệm: `backend/shootingstar/application/training/` cho `experiment.py`, `labels.py`, `modeling.py`, `splits.py` sau khi kiểm tra toàn bộ tham chiếu/CLI/tests; những module dùng chung (`domain/Candle`, snapshot storage, tính toán thời gian, kết quả) không nhân bản. Tạo `application/external_analysis/` riêng cho luồng API khi Phase 02 triển khai. Migrate callers/import/test/CLI đồng bộ, không giữ alias. Không biến nhánh train thành điều kiện của nhánh API.
+2. Quy ước đầu vào 30m: từ snapshot BTCUSDT Spot nến `1m`/`5m`, chỉ đọc **6 giờ trước `t`** với `available_at <= t`; tương ứng tối đa ~360/72 nến nếu đủ và liên tục. Xác minh SHA-256, nến thiếu, timeframe, nến chưa đóng, độ trễ và mốc `t` trong phạm vi snapshot. Thiếu 6 giờ/gap vượt ngưỡng chốt ở protocol → `INSUFFICIENT_HISTORY`/`UNSCORABLE`, không mượn nến sau `t`. Giá mua giả định `P` không tự đổi sang giá đóng nến. UTC epoch BE/API, UI UTC+7.
+3. Chốt **hai biến thể đầu vào để đo**: A — 6 giờ nến OHLCV có thứ tự; B — backend tính một ít ô có công thức, đơn vị, source bars cố định (return 15m/1h/3h/6h, vùng high/low, khối lượng, độ lệch `P` so giá cuối) + ít nến gần nhất. Không dùng nhãn cảm tính như “breakout chắc thắng”. Đây là cách đóng gói input, **không train**. Nếu sử dụng đặc trưng trong `application/features.py` phải kiểm tra riêng tính causal/đủ warmup; không bắt buộc dùng nó trong MVP.
+4. Chốt hợp đồng output `UP | DOWN | ABSTAIN`, mã bài học đã duyệt và chỉ số/mốc nến AI tham chiếu, rationale ngắn **ghi rõ model-generated**, không dùng % chưa hiệu chỉnh. Verifier code kiểm schema, allowlist bài học, mốc nến có trong input; không thể chứng minh lý do tự do hay dự báo đúng. Không cho agent tìm web trực tiếp khi dự báo snapshot lịch sử.
+5. Chốt prospective/hồi cứu: với snapshot quá khứ và model API hiện tại ghi **“minh họa hồi cứu; model có thể đã biết tương lai”**; chỉ các dự báo khóa tại thời gian thật trước outcome mới vào báo cáo prospective. Baseline và tiêu chí/số mẫu chốt trước khi chạy. Báo cáo thật thuộc [Phase 04](phase-04-prospective-evaluation.md).
+6. Kiểm tra hai ứng viên ban đầu (Gemini Flash và một OpenAI/Claude theo ngân sách) bằng tài liệu chính thức; chốt bậc dịch vụ, quyền gửi OHLCV, chi phí trần, URL/điều khoản nhà cung cấp. Free tier không gửi dữ liệu chưa được phép. **Gemini quota tính theo project, không theo key** [nguồn](https://ai.google.dev/gemini-api/docs/rate-limits); nhiều key không tăng quota.
 
-## Quy trình
+## Files và bước xác nhận
 
-1. Chốt 2 ứng viên ban đầu: Gemini Flash và một model dòng tiết kiệm của OpenAI **hoặc** Claude. Ghi đúng model ID/phiên bản và bảng giá tại thời điểm chạy; kiểm tra key, điều khoản dữ liệu free/paid và khả năng giới hạn ngân sách. Chưa cấp key thì chỉ đánh giá giấy tờ, không tuyên bố winner.
-2. Định nghĩa đầu vào giống hệt: BTCUSDT Spot, timeframe 1m/5m, lịch sử nến đóng trước `t`, giá mua giả định, horizon. Chốt quy tắc chọn mẫu, nến thiếu, click giữa nến, giá sau horizon và ngưỡng/định nghĩa UP/DOWN/UNSCORABLE **trước** khi so model. Không dùng trả lời người dùng làm nhãn.
-3. Chốt schema `UP | DOWN | ABSTAIN`, rationale ngắn, không yêu cầu xác suất; cùng prompt/template cho từng nhà cung cấp ở mức tương đương; không dùng live search/web grounding hoặc dữ liệu tương lai. Nhãn kết quả và điểm số tính trong backend, không tin output LLM tự chấm.
-4. Ghi riêng thử nghiệm hồi cứu (có nguy cơ kiến thức tương lai trong trọng số) và thử nghiệm prospective (khóa trước khi kỳ hạn đóng). Chỉ prospective dùng để đánh giá khả năng dự báo nhân quả; lịch sử chỉ có giá trị kiểm tra UX/định dạng và không gọi OOS hợp lệ.
-5. Chốt baseline trước: luôn UP, đa số lịch sử **chỉ tính từ quá khứ**, và nếu phù hợp một baseline close-to-close được sửa định nghĩa theo giá mua. Báo số mẫu, tỉ lệ UP/DOWN/ABSTAIN, accuracy trên những lần có dự báo kèm coverage, latency, lỗi provider, chi phí thực tế theo usage; không tính tỷ lệ đúng của tập ABSTAIN như thể đã dự báo. Nếu sau này có xác suất đã hiệu chỉnh thì thêm Brier/calibration ở một vòng đo riêng.
-6. Chia dữ liệu cho việc chọn prompt/ứng viên và phần đánh giá cuối; không xem kỳ đánh giá rồi sửa prompt và tái sử dụng để tuyên bố thắng. Không đủ số mẫu/thời kỳ: báo không đủ bằng chứng, tiếp tục thu thập theo kỳ hạn hợp lệ thay vì fake kết luận.
-
-## Gate / bằng chứng
-
-- [ ] Có văn bản chốt định nghĩa `(t, P, horizon)`, gap, nến kết quả, tiêu chí chất lượng, ngân sách API và quyền gửi dữ liệu cho nhà cung cấp.
-- [ ] Có bản ghi request/response, version, hash/cutoff, usage/chi phí thật; không lộ key hoặc tương lai trong prompt.
-- [ ] Có báo cáo so baseline với số mẫu thực theo horizon và phân biệt hồi cứu/prospective; chưa đủ dữ liệu thì kết luận **chưa đủ dữ liệu**.
-- [ ] Quyết định tiếp tục/không tiếp tục có căn cứ, không gọi model nào 'tốt nhất' khi chưa có phép đo.
-
-**Bước tiếp:** Chỉ sau gate này mới triển khai [Phase 02](phase-02-experimental-integration.md) ở nhãn thử nghiệm.
+- Refactor dự kiến: `backend/shootingstar/application/{experiment,labels,modeling,splits}.py`, callers trong `backend/shootingstar/cli/`, `backend/shootingstar/api/`, các module application và `tests/`. Đọc references trước khi move; giữ `application/features.py` ngoài `training/` nếu còn dùng chung.
+- Quy tắc input/output/lesson và quota được khóa trong tài liệu plan này; test định nghĩa theo snapshot ngắn/đủ/gap, mốc đóng nến/latency và thay nến tương lai.
+- [ ] Có contract 6h, `t+horizon`, gap/flat, mẫu A/B, nguồn lesson, ngân sách/chính sách dữ liệu và baseline được duyệt trước khi gọi API có phí (Chờ người vận hành cấp key/ngân sách).
+- [x] Nếu move code: mọi callers/CLI/tests được migrate sạch, `uv run --no-project pytest tests` pass (81/81 passed); `run-experiment` vẫn chạy bài toán close-to-close cũ (đã smoke test CLI thành công trên snapshot synthetic, exit code 0), không tuyên bố artifact này dùng cho `P` tùy ý.
+**Bước tiếp:** Cả protocol lẫn refactor train (nếu thực hiện trong phase này) phải qua gate riêng ở trên trước [Phase 02](phase-02-experimental-integration.md). Không cần log API thật để hoàn tất Phase 01; log và đánh giá thuộc Phase 02/04.
