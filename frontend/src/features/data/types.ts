@@ -58,3 +58,33 @@ export interface CandleDTO {
   quote_volume: number;
   trades_count: number;
 }
+
+export interface IngestionJobDTO {
+  job_id: string;
+  symbol: string;
+  timeframe: string;
+  start_time_ms: number;
+  end_time_ms: number;
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  created_at: string;
+  completed_at: string | null;
+  snapshot_id: string | null;
+  valid_candles_count: number | null;
+  coverage_ratio: number | null;
+  is_pristine: boolean | null;
+  error_message: string | null;
+}
+
+export interface PreviewIngestionDTO {
+  symbol: string;
+  timeframe: string;
+  start_time_ms: number;
+  end_time_ms: number;
+  estimated_candle_count: number;
+  sampled_candles_count: number;
+  data_source: string;
+  is_bounded: boolean;
+  quality_status: string;
+  sample_candles: CandleDTO[];
+  preview_token: string;
+}

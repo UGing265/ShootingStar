@@ -11,9 +11,9 @@ import {
   IngestionRunsView,
   SnapshotsView,
   QualityCard,
-  CandleTable,
 } from '@/features/data/components';
-
+import { CandlestickChart } from '@/features/data/candlestick-chart';
+import { SnapshotDownloader } from '@/features/data/snapshot-downloader';
 interface DataPageProps {
   searchParams?: Promise<{
     snapshot_id?: string;
@@ -38,16 +38,26 @@ export default async function DataPage(props: DataPageProps) {
   let candles: CandleDTO[] = [];
   let detailError: string | null = null;
 
+  const targetSnap = snapshots.find((s) => s.id === targetSnapshotId);
+
   if (targetSnapshotId) {
+    const tfMs = targetSnap?.timeframe === '5m' ? 5 * 60 * 1000 : 60 * 1000;
+    const initialStartMs = targetSnap
+      ? Math.max(targetSnap.start_time_ms, targetSnap.end_time_ms - 500 * tfMs)
+      : undefined;
+
     const [qualRes, candlesRes] = await Promise.all([
       fetchFromApi<SnapshotQualityResponse>(`/snapshots/${targetSnapshotId}/quality`),
-      fetchFromApi<CandleDTO[]>(`/snapshots/${targetSnapshotId}/candles`, { limit: 20 }),
+      fetchFromApi<CandleDTO[]>(`/snapshots/${targetSnapshotId}/candles`, {
+        start_ms: initialStartMs,
+        end_ms: targetSnap?.end_time_ms,
+        limit: 500,
+      }),
     ]);
     quality = qualRes.data;
     candles = candlesRes.data || [];
     detailError = qualRes.error || candlesRes.error;
   }
-
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
@@ -62,25 +72,34 @@ export default async function DataPage(props: DataPageProps) {
         <ErrorBanner message={runsRes.error || snapshotsRes.error || detailError || 'Không tải được dữ liệu giá đã lưu'} />
       )}
 
+
+      <SnapshotDownloader />
       {quality && <QualityCard quality={quality} />}
+
+      {targetSnapshotId && (
+        <CandlestickChart
+          initialCandles={candles}
+          timeframe={targetSnap?.timeframe || '1m'}
+          symbol={targetSnap?.symbol || 'BTCUSDT'}
+          snapshotId={targetSnapshotId}
+          snapshotStartMs={targetSnap?.start_time_ms}
+          snapshotEndMs={targetSnap?.end_time_ms}
+          isPristine={quality?.is_pristine ?? undefined}
+          allSnapshots={snapshots.map((s) => ({
+            id: s.id,
+            symbol: s.symbol,
+            timeframe: s.timeframe,
+            start_time_ms: s.start_time_ms,
+            end_time_ms: s.end_time_ms,
+            candle_count: s.candle_count,
+          }))}
+        />
+      )}
 
       <Card>
         <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 16 }}>Bản dữ liệu Parquet</h2>
         <SnapshotsView snapshots={snapshots} selectedId={targetSnapshotId || undefined} />
       </Card>
-
-      {targetSnapshotId && (
-        <Card>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <h2 style={{ fontSize: 20, fontWeight: 600 }}>Xem trước 20 nến đầu tiên</h2>
-            <span style={{ fontSize: 13, color: 'var(--ink-muted)' }}>
-              Bản dữ liệu đã chọn: <code className="code-snippet">{targetSnapshotId}</code>
-            </span>
-          </div>
-          <CandleTable candles={candles} />
-        </Card>
-      )}
-
       <Card>
         <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 16 }}>Lần nạp dữ liệu</h2>
         <IngestionRunsView runs={runs} />
