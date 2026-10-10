@@ -1,7 +1,15 @@
 """Causal 6-hour windowing and context serializers (Variants A and B)."""
 
+import hashlib
+import json
 import math
 from typing import Any, Dict, List, Optional
+from shootingstar.application.external_analysis.contracts import (
+    FeedCandle,
+    FeedContract,
+    FeedCoverage,
+    FeedFeature,
+)
 from shootingstar.domain.exceptions import DomainError
 from shootingstar.domain.models import Candle, Timeframe
 
@@ -165,4 +173,215 @@ def build_context_b(
             "ret_6h": (latest_close - candles[0].open) / candles[0].open if candles[0].open > 0 else 0.0,
         },
         "tail_candles": tail_bars,
+    }
+
+def build_feed_contract(
+    candles: List[Candle],
+    snapshot_id: str,
+    snapshot_checksum: str,
+    prediction_time_t_ms: int,
+    purchase_price_p: float,
+    horizon_minutes: int = 30,
+    assumed_latency_ms: int = 1000,
+) -> FeedContract:
+    """Builds strictly validated FeedContract v1 from causal 6-hour window."""
+    window_candles = extract_causal_window(
+        candles=candles,
+        t_ms=prediction_time_t_ms,
+        window_hours=6.0,
+        assumed_latency_ms=assumed_latency_ms,
+    )
+
+    timeframe = window_candles[0].timeframe
+    symbol = window_candles[0].symbol
+    start_ms = window_candles[0].open_time_ms
+    end_ms = window_candles[-1].close_time_ms
+
+    # Canonical feed candles
+    feed_candles = [
+        FeedCandle(
+            candle_id=f"{snapshot_id}_{timeframe}_{c.open_time_ms}",
+            open_time_ms=c.open_time_ms,
+            close_time_ms=c.close_time_ms,
+            open=float(c.open),
+            high=float(c.high),
+            low=float(c.low),
+            close=float(c.close),
+            volume=float(c.volume),
+        )
+        for c in window_candles
+    ]
+
+    required_span_ms = int(6.0 * 3600 * 1000)
+    observed_span_ms = end_ms - start_ms
+    coverage = FeedCoverage(
+        required_span_ms=required_span_ms,
+        observed_span_ms=observed_span_ms,
+        gaps_count=0,
+        invalid_rows_count=0,
+        status="COMPLETE",
+    )
+
+    latest_close = window_candles[-1].close
+    highs = [c.high for c in window_candles]
+    lows = [c.low for c in window_candles]
+    highest_p = max(highs)
+    lowest_p = min(lows)
+    total_vol = sum(c.volume for c in window_candles)
+    p_dev = (latest_close - purchase_price_p) / purchase_price_p if purchase_price_p > 0 else 0.0
+    volatility_pct = (highest_p - lowest_p) / lowest_p if lowest_p > 0 else 0.0
+
+    last_c = window_candles[-1]
+    last_id = feed_candles[-1].candle_id
+    rng = last_c.high - last_c.low
+    body = abs(last_c.close - last_c.open)
+    upper_wick = last_c.high - max(last_c.open, last_c.close)
+    lower_wick = min(last_c.open, last_c.close) - last_c.low
+
+    # 1h lookback bars
+    tf = Timeframe(timeframe)
+    bars_1h = max(1, 60 * 60 * 1000 // tf.duration_ms)
+    ret_1h = 0.0
+    if len(window_candles) > bars_1h:
+        past_c = window_candles[-1 - bars_1h].close
+        ret_1h = (latest_close - past_c) / past_c if past_c > 0 else 0.0
+
+    features = [
+        FeedFeature(
+            feature_id="latest_close_vs_p_pct",
+            value=round(p_dev, 6),
+            unit="ratio",
+            formula_version="v1",
+            source_candle_ids=[last_id],
+        ),
+        FeedFeature(
+            feature_id="range_high_6h",
+            value=round(highest_p, 4),
+            unit="price",
+            formula_version="v1",
+            source_candle_ids=[feed_candles[highs.index(highest_p)].candle_id],
+        ),
+        FeedFeature(
+            feature_id="range_low_6h",
+            value=round(lowest_p, 4),
+            unit="price",
+            formula_version="v1",
+            source_candle_ids=[feed_candles[lows.index(lowest_p)].candle_id],
+        ),
+        FeedFeature(
+            feature_id="volatility_6h_pct",
+            value=round(volatility_pct, 6),
+            unit="ratio",
+            formula_version="v1",
+            source_candle_ids=[feed_candles[0].candle_id, last_id],
+        ),
+        FeedFeature(
+            feature_id="total_volume_6h",
+            value=round(total_vol, 4),
+            unit="volume",
+            formula_version="v1",
+            source_candle_ids=[c.candle_id for c in feed_candles],
+        ),
+        FeedFeature(
+            feature_id="return_1h",
+            value=round(ret_1h, 6),
+            unit="ratio",
+            formula_version="v1",
+            source_candle_ids=[feed_candles[-1 - min(bars_1h, len(feed_candles) - 1)].candle_id, last_id],
+        ),
+        FeedFeature(
+            feature_id="last_candle_body_ratio",
+            value=round(body / rng, 6) if rng > 1e-8 else 0.0,
+            unit="ratio",
+            formula_version="v1",
+            source_candle_ids=[last_id],
+        ),
+        FeedFeature(
+            feature_id="last_candle_upper_wick_ratio",
+            value=round(upper_wick / rng, 6) if rng > 1e-8 else 0.0,
+            unit="ratio",
+            formula_version="v1",
+            source_candle_ids=[last_id],
+        ),
+        FeedFeature(
+            feature_id="last_candle_lower_wick_ratio",
+            value=round(lower_wick / rng, 6) if rng > 1e-8 else 0.0,
+            unit="ratio",
+            formula_version="v1",
+            source_candle_ids=[last_id],
+        ),
+    ]
+
+    # Deterministic feed hash
+    hash_material = f"feed_v1:{snapshot_id}:{snapshot_checksum}:{symbol}:{timeframe}:{prediction_time_t_ms}:{purchase_price_p}:{horizon_minutes}:{start_ms}:{end_ms}:{len(feed_candles)}"
+    feed_hash = hashlib.sha256(hash_material.encode("utf-8")).hexdigest()
+    feed_id = f"feed_{feed_hash[:16]}"
+
+    return FeedContract(
+        feed_id=feed_id,
+        feed_version="v1",
+        feed_hash=feed_hash,
+        snapshot_id=snapshot_id,
+        snapshot_checksum=snapshot_checksum,
+        symbol=symbol,
+        timeframe=timeframe,
+        prediction_time_t_ms=prediction_time_t_ms,
+        purchase_price_p=purchase_price_p,
+        horizon_minutes=horizon_minutes,
+        context_start_open_time_ms=start_ms,
+        context_end_close_time_ms=end_ms,
+        assumed_latency_ms=assumed_latency_ms,
+        candles=feed_candles,
+        coverage=coverage,
+        features=features,
+    )
+
+
+def feed_contract_to_dict(feed: FeedContract) -> Dict[str, Any]:
+    """Serializes FeedContract into dict suitable for JSON payload or storage."""
+    return {
+        "feed_id": feed.feed_id,
+        "feed_version": feed.feed_version,
+        "feed_hash": feed.feed_hash,
+        "snapshot_id": feed.snapshot_id,
+        "snapshot_checksum": feed.snapshot_checksum,
+        "symbol": feed.symbol,
+        "timeframe": feed.timeframe,
+        "prediction_time_t_ms": feed.prediction_time_t_ms,
+        "purchase_price_p": feed.purchase_price_p,
+        "horizon_minutes": feed.horizon_minutes,
+        "context_start_open_time_ms": feed.context_start_open_time_ms,
+        "context_end_close_time_ms": feed.context_end_close_time_ms,
+        "assumed_latency_ms": feed.assumed_latency_ms,
+        "candle_count": len(feed.candles),
+        "candles": [
+            {
+                "candle_id": c.candle_id,
+                "open_time_ms": c.open_time_ms,
+                "close_time_ms": c.close_time_ms,
+                "open": c.open,
+                "high": c.high,
+                "low": c.low,
+                "close": c.close,
+                "volume": c.volume,
+            }
+            for c in feed.candles
+        ],
+        "coverage": {
+            "required_span_ms": feed.coverage.required_span_ms,
+            "observed_span_ms": feed.coverage.observed_span_ms,
+            "gaps_count": feed.coverage.gaps_count,
+            "invalid_rows_count": feed.coverage.invalid_rows_count,
+            "status": feed.coverage.status,
+        },
+        "features": [
+            {
+                "feature_id": f.feature_id,
+                "value": f.value,
+                "unit": f.unit,
+                "formula_version": f.formula_version,
+                "source_candle_ids": f.source_candle_ids,
+            }
+            for f in feed.features
+        ],
     }
