@@ -58,5 +58,6 @@ out/
 data/raw/
 data/snapshots/
 data/models/
+data/simulations/
 *.parquet
 *.sqlite
