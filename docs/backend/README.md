@@ -30,9 +30,13 @@ SHOOTINGSTAR_TEST_DATABASE_URL=postgresql+psycopg2://user:password@127.0.0.1:543
 Activate the virtual environment and install packages:
 
 ```powershell
-# In repository root
-.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.venv\Scripts\alembic.exe upgrade head
+# In repository root: install backend in editable mode
+.venv\Scripts\python.exe -m pip install -e "backend[dev]"
+
+# Run migrations (from backend directory or passing config)
+Set-Location backend
+..\.venv\Scripts\alembic.exe upgrade head
+Set-Location ..
 ```
 
 ## 4. Running the Backend Service
@@ -52,7 +56,10 @@ Launch the FastAPI application on `127.0.0.1:8000`:
 Run the full pytest suite (52+ tests verifying causal boundaries, latency gating, and API contracts):
 
 ```powershell
-.venv\Scripts\python.exe -m pytest
+# Run full backend pytest suite
+.venv\Scripts\python.exe -m pytest backend/tests
+# Or from inside backend directory:
+# cd backend && ..\.venv\Scripts\python.exe -m pytest
 ```
 
 ## 6. CLI Ingestion & Historical Replay

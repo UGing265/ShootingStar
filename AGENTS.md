@@ -55,7 +55,7 @@ Mọi đầu việc lớn, phase nghiên cứu mới hoặc đợt tái cấu tr
    - Không làm lộ đường dẫn file nội bộ (`file_path`, `artifact_path`), thông tin mật hoặc chuỗi kết nối Database qua các endpoint public của API (như `/health`, `/snapshots`).
    - `frontend/.env.local` phải được git-ignore; `frontend/.env.example` chỉ chứa biến cấu hình công khai (`SHOOTINGSTAR_API_URL`).
 3. **Kiểm thử trước khi bàn giao:**
-   - Khi chỉnh sửa backend: Chạy `pytest tests/test_api_and_ui.py` (hoặc test tương ứng) để xác nhận không vỡ contract.
+   - Khi chỉnh sửa backend: Chạy `pytest backend/tests/test_api_and_ui.py` (hoặc test tương ứng) để xác nhận không vỡ contract.
    - Khi chỉnh sửa frontend: Chạy `npm run typecheck` hoặc `npm run build` trong `frontend/`.
 4. **Git & Commit Hygenic:**
    - Commit dạng atomic, có prefix rõ ràng: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`.

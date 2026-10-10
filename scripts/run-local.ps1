@@ -92,7 +92,7 @@ if (-not (Test-Path $FrontendEnvLocal)) {
 # 3. Database Migrations
 if (-not $FrontendOnly -and -not $SkipMigration) {
     Write-Host "`n[3/5] Running database migrations..." -ForegroundColor Yellow
-    Push-Location $ProjectRoot
+    Push-Location (Join-Path $ProjectRoot "backend")
     try {
         & $VenvPython -m alembic upgrade head
         Write-Host "  [OK] Database schema is up to date" -ForegroundColor Green

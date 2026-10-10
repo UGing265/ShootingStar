@@ -23,7 +23,7 @@ Open PowerShell at repository root:
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 
 # 2. Apply database migrations
-.venv\Scripts\alembic.exe upgrade head
+.venv\Scripts\alembic.exe -c backend/alembic.ini upgrade head
 
 # 3. Start the FastAPI backend
 .venv\Scripts\python.exe -m uvicorn shootingstar.api.app:app --host 127.0.0.1 --port 8000
