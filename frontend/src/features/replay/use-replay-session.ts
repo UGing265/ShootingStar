@@ -3,11 +3,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CandleDTO, SnapshotSummary } from '../data/types';
 import type { SimulationJobResponse } from './types';
-import type { ExternalAnalysisJobDTO, ExternalContextVariant } from './external-types';
+import type { ExternalAnalysisJobDTO } from './external-types';
 import { isInProgress } from '../report/labels';
 import { saveRecentReport } from '../report/recent-reports';
 import { formatDateTime } from '@/shared/format';
-import { HORIZON_MINUTES, REQUIRED_HISTORY_HOURS, WINDOW_CANDLES, causalHours, defaultPickIndex, windowStartMs } from './replay-utils';
+import {
+  FORECAST_HORIZON_MINUTES,
+  FORECAST_LOOKBACK_DAYS,
+  FORECAST_REQUIRED_HISTORY_HOURS,
+  STRATEGY_HORIZON_MINUTES,
+  STRATEGY_REQUIRED_HISTORY_HOURS,
+  WINDOW_CANDLES,
+  defaultPickIndex,
+  windowStartMs,
+} from './replay-utils';
 
 export type ReplayStep = 'setup' | 'analysis' | 'vote' | 'result';
 export type ReplayEngine = 'strategy' | 'gemini';
@@ -44,10 +53,6 @@ export interface ReplaySession {
   loadingCandles: boolean;
   engine: ReplayEngine;
   setEngine: (engine: ReplayEngine) => void;
-  variant: ExternalContextVariant;
-  setVariant: (variant: ExternalContextVariant) => void;
-  dryRun: boolean;
-  setDryRun: (value: boolean) => void;
   buyTimeMs: number;
   setBuyTimeMs: (ms: number) => void;
   buyPriceInput: string;
@@ -80,8 +85,6 @@ export function useReplaySession(snapshots: SnapshotSummary[], initialCandles: C
   const [loadingCandles, setLoadingCandles] = useState(false);
 
   const [engine, setEngine] = useState<ReplayEngine>('strategy');
-  const [variant, setVariant] = useState<ExternalContextVariant>('A');
-  const [dryRun, setDryRun] = useState(true);
 
   const [buyTimeMs, setBuyTimeMs] = useState(initialPick?.close_time_ms ?? 0);
   const [buyPriceInput, setBuyPriceInput] = useState(initialPick ? String(initialPick.close) : '');
@@ -94,14 +97,22 @@ export function useReplaySession(snapshots: SnapshotSummary[], initialCandles: C
 
   const skipFirstLoad = useRef(initialCandles.length > 0);
 
-  const hoursBefore = useMemo(() => causalHours(candles, buyTimeMs), [candles, buyTimeMs]);
-  const hasEnoughHistory = hoursBefore >= REQUIRED_HISTORY_HOURS - 0.05;
-
   const snapshot = useMemo(() => snapshots.find((s) => s.id === snapshotId), [snapshots, snapshotId]);
-  // Last HORIZON_MINUTES of a snapshot cannot be verified against future candles.
+
+  // Hours available before buyTimeMs across the whole snapshot, matching backend validation.
+  const hoursBefore = useMemo(() => {
+    if (!snapshot || !buyTimeMs || buyTimeMs <= snapshot.start_time_ms) return 0;
+    return (buyTimeMs - snapshot.start_time_ms) / 3_600_000;
+  }, [snapshot, buyTimeMs]);
+
+  const horizonMinutes = engine === 'gemini' ? FORECAST_HORIZON_MINUTES : STRATEGY_HORIZON_MINUTES;
+  const requiredHours = engine === 'gemini' ? FORECAST_REQUIRED_HISTORY_HOURS : STRATEGY_REQUIRED_HISTORY_HOURS;
+  const hasEnoughHistory = hoursBefore >= requiredHours - 0.05;
+
+  // The last horizon of a snapshot cannot be verified against future candles.
   const timeRange = useMemo(
-    () => (snapshot ? { min: snapshot.start_time_ms, max: snapshot.end_time_ms - HORIZON_MINUTES * 60_000 } : null),
-    [snapshot],
+    () => (snapshot ? { min: snapshot.start_time_ms, max: snapshot.end_time_ms - horizonMinutes * 60_000 } : null),
+    [snapshot, horizonMinutes],
   );
   const [timeError, setTimeError] = useState<string | null>(null);
   const requestRef = useRef(0);
@@ -191,7 +202,7 @@ export function useReplaySession(snapshots: SnapshotSummary[], initialCandles: C
         snapshot_id: snapshot,
         buy_time_ms: timeMs,
         buy_price: price,
-        horizon_minutes: HORIZON_MINUTES,
+        horizon_minutes: STRATEGY_HORIZON_MINUTES,
       });
       setSimJob(job);
     },
@@ -210,7 +221,9 @@ export function useReplaySession(snapshots: SnapshotSummary[], initialCandles: C
       return;
     }
     if (engine === 'gemini' && !hasEnoughHistory) {
-      setError(`Chưa đủ ${REQUIRED_HISTORY_HOURS} giờ nến trước thời điểm dự báo. Chọn thời điểm muộn hơn hoặc tải bộ dữ liệu dài hơn.`);
+      setError(
+        `Chưa đủ ${FORECAST_LOOKBACK_DAYS} ngày nến liên tục trước thời điểm dự báo cho mô hình 6 giờ. Chọn thời điểm muộn hơn hoặc tải bộ dữ liệu dài hơn.`,
+      );
       return;
     }
 
@@ -221,13 +234,12 @@ export function useReplaySession(snapshots: SnapshotSummary[], initialCandles: C
           snapshot_id: snapshotId,
           prediction_time_t_ms: buyTimeMs,
           purchase_price_p: price,
-          horizon_minutes: HORIZON_MINUTES,
-          context_variant: variant,
+          horizon_minutes: FORECAST_HORIZON_MINUTES,
+          lookback_days: FORECAST_LOOKBACK_DAYS,
           mode: 'RETROSPECTIVE',
-          mock_mode: dryRun,
         });
         setExternalJob(job);
-        setExternalMock(dryRun);
+        setExternalMock(false);
         setSimJob(null);
         saveRecentReport({
           id: job.id,
@@ -236,7 +248,7 @@ export function useReplaySession(snapshots: SnapshotSummary[], initialCandles: C
           predictionTimeMs: job.prediction_time_t_ms,
           purchasePrice: job.purchase_price_p,
           savedAtMs: Date.now(),
-          mock: dryRun,
+          mock: false,
         });
       } else {
         await createStrategyJob(snapshotId, buyTimeMs, price);
@@ -249,7 +261,7 @@ export function useReplaySession(snapshots: SnapshotSummary[], initialCandles: C
     } finally {
       setBusy(null);
     }
-  }, [buyPriceInput, buyTimeMs, engine, hasEnoughHistory, snapshotId, variant, dryRun, createStrategyJob]);
+  }, [buyPriceInput, buyTimeMs, engine, hasEnoughHistory, snapshotId, createStrategyJob]);
 
   /** Adds the entry-strategy simulation at the same point as an existing report. */
   const addStrategy = useCallback(async () => {
@@ -345,10 +357,6 @@ export function useReplaySession(snapshots: SnapshotSummary[], initialCandles: C
     loadingCandles,
     engine,
     setEngine,
-    variant,
-    setVariant,
-    dryRun,
-    setDryRun,
     buyTimeMs,
     setBuyTimeMs,
     buyPriceInput,

@@ -59,7 +59,7 @@ export function StrategyCard({ evaluation }: { evaluation: StrategyEvaluationDTO
               value={formatUsd(entry)}
               hint={
                 evaluation.zone_low && evaluation.zone_high
-                  ? `${formatUsd(evaluation.zone_low)} – ${formatUsd(evaluation.zone_high)}`
+                  ? `${formatUsd(evaluation.zone_low)} đến ${formatUsd(evaluation.zone_high)}`
                   : undefined
               }
             />

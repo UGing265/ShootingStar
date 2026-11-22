@@ -96,3 +96,40 @@ export async function postToApi<T>(
     return { data: null, error: message, status: 503 };
   }
 }
+
+export interface ForecastScoreboardMetric {
+  n: number;
+  correct: number;
+  accuracy: number | null;
+  wilson_95: [number, number] | null;
+}
+
+export interface ForecastScoreboard {
+  snapshot_id: string;
+  horizon_minutes: number;
+  lookback_days: number;
+  total: number;
+  flat: number;
+  unscorable: number;
+  missing_baseline_or_direction: number;
+  scored: number;
+  threshold_n: Record<string, number>;
+  accuracy: Record<string, ForecastScoreboardMetric>;
+  confidence: Record<string, ForecastScoreboardMetric>;
+  agreement: Record<string, ForecastScoreboardMetric>;
+  possible_memorization: Record<string, ForecastScoreboardMetric>;
+}
+
+/** Server-side scoreboard read. The browser never recomputes these metrics. */
+export async function fetchForecastScoreboard(
+  snapshotId: string,
+  horizonMinutes: number,
+  lookbackDays: number,
+  customHeaders?: Record<string, string>,
+): Promise<ApiResult<ForecastScoreboard>> {
+  return fetchFromApi<ForecastScoreboard>(
+    '/external-analysis/scoreboard',
+    { snapshot_id: snapshotId, horizon: horizonMinutes, lookback_days: lookbackDays },
+    customHeaders,
+  );
+}

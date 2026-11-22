@@ -3,14 +3,25 @@
 import React from 'react';
 import Link from 'next/link';
 import { Badge, Card, Notice, Spinner } from '@/shared/ui/primitives';
-import { directionArrow, directionLabel, formatPct, formatUsd } from '@/shared/format';
+import {
+  directionArrow,
+  directionLabel,
+  formatHorizonMinutes,
+  formatPct,
+  formatUsd,
+  forecastDirectionLabel,
+} from '@/shared/format';
 import { ReplayChart } from './replay-chart';
 import { StrategyResult } from './strategy-card';
 import { reportHref } from '../report/recent-reports';
+import { ForecastComparison } from '../report/forecast-comparison';
 import { strategyLevels } from './replay-utils';
 import type { ReplaySession } from './use-replay-session';
 
-function Verdict({ correct }: { correct: boolean | null }) {
+function Verdict({ correct, outcome }: { correct: boolean | null; outcome?: string | null }) {
+  if (outcome === 'FLAT' || outcome === 'UNSCORABLE') {
+    return <Badge variant="neutral">Không chấm</Badge>;
+  }
   if (correct === null) return <Badge variant="neutral">Chưa có dữ liệu</Badge>;
   return correct ? <Badge variant="success">Đúng</Badge> : <Badge variant="error">Sai</Badge>;
 }
@@ -36,6 +47,8 @@ export function ReplayResult({ session, timeframe }: { session: ReplaySession; t
   const targetPrice = externalJob?.target_price ?? simJob?.outcome?.future_price ?? null;
   const changePct = simJob?.outcome?.price_change_pct ?? (targetPrice && buyPrice ? ((targetPrice - buyPrice) / buyPrice) * 100 : null);
   const unscorable = simJob?.outcome?.status === 'UNSCORABLE' || externalJob?.outcome === 'UNSCORABLE';
+  const flat = outcomeDirection === 'FLAT';
+  const flatThreshold = externalJob?.evidence_envelope?.flat_threshold_pct ?? 0.5;
 
   const userCorrect =
     userVote && (outcomeDirection === 'UP' || outcomeDirection === 'DOWN') ? userVote === outcomeDirection : null;
@@ -80,7 +93,7 @@ export function ReplayResult({ session, timeframe }: { session: ReplaySession; t
         <h2 className="card-title">Thị trường đã đi thế nào</h2>
         <div className="grid-4 replay-levels">
           <Metric label="Giá tại thời điểm">{formatUsd(buyPrice)}</Metric>
-          <Metric label={`Giá sau ${horizon} phút`}>{formatUsd(targetPrice)}</Metric>
+          <Metric label={`Giá sau ${formatHorizonMinutes(horizon)}`}>{formatUsd(targetPrice)}</Metric>
           <Metric label="Thay đổi">{changePct !== null ? formatPct(changePct) : 'Chưa có dữ liệu'}</Metric>
           <Metric label="Hướng">
             {directionArrow(outcomeDirection)} {directionLabel(outcomeDirection)}
@@ -88,22 +101,36 @@ export function ReplayResult({ session, timeframe }: { session: ReplaySession; t
         </div>
       </Card>
 
+      {flat && (
+        <Notice variant="neutral" title={`Đi ngang (dưới ${flatThreshold}%), không chấm.`}>
+          Biến động nhỏ hơn ngưỡng nên không tính đúng sai cho Gemini hay hai luật đơn giản.
+        </Notice>
+      )}
+
+      {externalJob?.evidence_envelope?.protocol_version === 'forecast-6h-v1' && (
+        <ForecastComparison job={externalJob} />
+      )}
+
       <div className="grid-2">
         <Card compact>
           <div className="spread">
             <span className="card-title">Bạn</span>
-            <Verdict correct={userCorrect} />
+            <Verdict correct={userCorrect} outcome={outcomeDirection} />
           </div>
           <p className="card-sub">Bạn chọn: {userVote ? directionLabel(userVote) : 'Chưa dự đoán'}</p>
         </Card>
         {ai && (
           <Card compact>
             <div className="spread">
-              <span className="card-title">Báo cáo Gemini</span>
+              <span className="card-title">Báo cáo Gemini {formatHorizonMinutes(horizon)}</span>
               {externalMock && <Badge variant="warning">DỮ LIỆU GIẢ LẬP</Badge>}
-              {ai.direction === 'ABSTAIN' ? <Badge variant="neutral">Không dự báo</Badge> : <Verdict correct={aiCorrect} />}
+              {ai.direction === 'ABSTAIN' ? (
+                <Badge variant="neutral">Không dự báo</Badge>
+              ) : (
+                <Verdict correct={aiCorrect} outcome={outcomeDirection} />
+              )}
             </div>
-            <p className="card-sub">Dự báo: {directionLabel(ai.direction)}</p>
+            <p className="card-sub">Dự báo: {forecastDirectionLabel(ai.direction)}</p>
           </Card>
         )}
       </div>

@@ -68,8 +68,72 @@ export interface ReportSections {
   gioi_han_va_kha_nang_ap_dung?: string;
 }
 
+/** One causal indicator exposed in a forecast-6h-v1 digest. */
+export interface ForecastFeature {
+  feature_id: string;
+  timeframe: string;
+  name: string;
+  value: number | null;
+  unit: string;
+}
+
+export interface ForecastReason {
+  feature_ids: string[];
+  text: string;
+}
+
+export interface ForecastAnswer {
+  direction: 'UP' | 'DOWN';
+  confidence: 'LOW' | 'MEDIUM' | 'HIGH';
+  reasons: ForecastReason[];
+  risks: string[];
+}
+
+export interface ForecastVerificationIssue {
+  reason_index: number;
+  type: string;
+  value: string;
+}
+
+export interface ForecastVerification {
+  valid: boolean;
+  issues: ForecastVerificationIssue[];
+}
+
+export interface ForecastDigest {
+  features: ForecastFeature[];
+  digest_hash: string;
+}
+
+export interface ForecastBaselines {
+  always_up: string | null;
+  momentum_6h: string | null;
+}
+
+export interface ForecastTokenUsage {
+  key_index?: number | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+}
+
 export interface EvidenceEnvelopeDTO {
   protocol_version: string;
+
+  // forecast-6h-v1
+  digest?: ForecastDigest;
+  answer?: ForecastAnswer;
+  verification?: ForecastVerification;
+  agreement_score?: { up: number; down: number; total: number };
+  baselines?: ForecastBaselines;
+  possible_memorization?: boolean;
+  horizon_minutes?: number;
+  lookback_days?: number;
+  flat_threshold_pct?: number;
+  prompt_version?: string;
+  token_usage?: ForecastTokenUsage;
+
+  // legacy evidence-pipeline-v1
   feed?: { features?: Array<{ feature_id: string; value: number }> } & Record<string, unknown>;
   research?: {
     search_provider?: string;
@@ -86,6 +150,7 @@ export interface EvidenceEnvelopeDTO {
 export interface ExternalAnalysisJobDTO {
   id: string;
   snapshot_id: string;
+  snapshot_hash: string;
   symbol: string;
   timeframe: string;
   prediction_time_t_ms: number;
@@ -103,4 +168,5 @@ export interface ExternalAnalysisJobDTO {
   error_message: string | null;
   leakage_risk_banner: boolean;
   evidence_envelope?: EvidenceEnvelopeDTO | null;
+  stages?: Array<Record<string, unknown>> | null;
 }
