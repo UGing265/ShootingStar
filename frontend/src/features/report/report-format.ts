@@ -170,7 +170,7 @@ export function formatCanonicalFeatureTable(
 
   if (featMap.has('latest_close_vs_p_pct')) {
     rows.push({
-      label: 'Chênh lệch giá đóng cửa gần nhất so với giá mua (P)',
+      label: 'Chênh lệch giá đóng cửa gần nhất so với giá tại thời điểm dự báo (P)',
       valueStr: formatPercentRatio(featMap.get('latest_close_vs_p_pct')),
       unitMeaning: 'Tỷ lệ % độ lệch giá',
     });

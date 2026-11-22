@@ -1,0 +1,179 @@
+/* Giới thiệu: scrollytelling stage + narrative cards (original design, new tokens). */
+
+.about-wrap {
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 48px;
+}
+
+.about-hero {
+  text-align: center;
+  padding-top: 20px;
+}
+
+.about-hero-badge {
+  margin-bottom: 12px;
+}
+
+.about-hero-title {
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  margin-bottom: 16px;
+}
+
+.about-hero-lead {
+  font-size: 18px;
+  color: var(--ink-48);
+  line-height: 1.6;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.about-footer {
+  text-align: center;
+  padding: 24px 0 60px;
+}
+
+.btn-action {
+  display: inline-block;
+  padding: 14px 28px;
+  border-radius: var(--r-sm);
+  background: var(--primary);
+  color: var(--on-dark);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  transition: background-color 0.15s ease;
+}
+
+.btn-action:hover {
+  background: var(--primary-focus);
+  color: var(--on-dark);
+  text-decoration: none;
+}
+
+.scrolly-container {
+  position: relative;
+  margin: 40px 0;
+}
+
+.scrolly-stage {
+  position: sticky;
+  top: 24px;
+  height: 420px;
+  background: #121214;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  overflow: hidden;
+  border: 1px solid #2c2c2e;
+  z-index: 10;
+}
+
+.scrolly-stage svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.scrolly-scenes {
+  position: relative;
+  z-index: 20;
+  margin-top: -380px;
+  display: flex;
+  flex-direction: column;
+  gap: 160px;
+  padding-bottom: 80px;
+}
+
+.scrolly-step {
+  min-height: 60vh;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.scrolly-step:nth-child(even) {
+  justify-content: flex-end;
+}
+
+.scrolly-card {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border: 1px solid var(--hairline);
+  border-radius: 18px;
+  padding: 32px;
+  max-width: 480px;
+}
+
+.scrolly-step-tag {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--primary);
+  margin-bottom: 8px;
+}
+
+.scrolly-step-title {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--ink);
+  margin-bottom: 12px;
+}
+
+.scrolly-step-text {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink-48);
+}
+
+@media (max-width: 768px) {
+  .about-hero-title {
+    font-size: 32px;
+  }
+
+  .scrolly-stage {
+    position: relative;
+    top: 0;
+    height: 300px;
+    margin-bottom: 24px;
+  }
+
+  .scrolly-scenes {
+    margin-top: 0;
+    gap: 32px;
+  }
+
+  .scrolly-step {
+    min-height: auto;
+    justify-content: stretch !important;
+  }
+
+  .scrolly-card {
+    max-width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrolly-stage {
+    position: relative;
+    top: 0;
+  }
+
+  .scrolly-scenes {
+    margin-top: 0;
+    gap: 40px;
+  }
+
+  .scrolly-step {
+    min-height: auto;
+  }
+}

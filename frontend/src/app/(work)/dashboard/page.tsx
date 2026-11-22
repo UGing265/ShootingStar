@@ -1,164 +1,145 @@
 import React from 'react';
 import Link from 'next/link';
 import { fetchFromApi } from '@/shared/api-client';
-import { Card, Badge, ErrorBanner } from '@/shared/ui/primitives';
-import { SnapshotSummary } from '@/features/data/types';
-import { ExperimentSummary } from '@/features/research/types';
-import { SignalSummary } from '@/features/signals/types';
+import { Badge, Card, EmptyState, ErrorBanner, PageHeader, StatBox } from '@/shared/ui/primitives';
+import { formatDate, formatInt, formatIsoDateTime } from '@/shared/format';
+import type { SnapshotSummary } from '@/features/data/types';
 
 interface HealthData {
   status: string;
-  database: string;
   database_status: string;
   engine: string;
   timestamp_utc: string;
 }
 
-export default async function OverviewPage() {
-  const [healthRes, snapshotsRes, experimentsRes, signalsRes] = await Promise.all([
+const STEPS = [
+  {
+    href: '/data',
+    title: 'Lịch sử giá',
+    text: 'Tải và xem nến BTC/USDT đã lưu, kiểm tra khoảng thiếu nến.',
+  },
+  {
+    href: '/replay',
+    title: 'Mô phỏng',
+    text: 'Chọn một thời điểm trong quá khứ, xem dự báo, vào lệnh thử và đối chiếu kết quả.',
+  },
+  {
+    href: '/report',
+    title: 'Báo cáo',
+    text: 'Đọc lại báo cáo phân tích của các lần mô phỏng đã chạy.',
+  },
+];
+
+export default async function DashboardPage() {
+  const [healthRes, snapshotsRes] = await Promise.all([
     fetchFromApi<HealthData>('/health'),
     fetchFromApi<SnapshotSummary[]>('/snapshots', { limit: 5 }),
-    fetchFromApi<ExperimentSummary[]>('/experiments', { limit: 5 }),
-    fetchFromApi<SignalSummary[]>('/signals', { limit: 5 }),
   ]);
 
-  const hasError = healthRes.error || snapshotsRes.error || experimentsRes.error || signalsRes.error;
   const health = healthRes.data;
-  const snapshots = snapshotsRes.data || [];
-  const experiments = experimentsRes.data || [];
-  const signals = signalsRes.data || [];
+  const snapshots = snapshotsRes.data ?? [];
+  const latest = snapshots[0];
+  const error = healthRes.error || snapshotsRes.error;
+  const serviceOk = health?.status === 'ok';
 
   return (
-    <div>
-      <div className="page-header">
-        <h1 className="page-title">Tổng quan</h1>
-        <p className="page-description">
-          Xem dữ liệu giá lịch sử, thử nghiệm và các dự đoán hướng giá BTCUSDT trong 30 phút tới đã ghi nhận.
-        </p>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Tổng quan"
+        description="Nghiên cứu hướng giá BTC/USDT trong 30 phút bằng dữ liệu lịch sử. Chỉ dùng nến đã đóng, không nhìn trước tương lai."
+      />
 
-      {hasError && (
-        <ErrorBanner
-          message={
-            healthRes.error ||
-            snapshotsRes.error ||
-            experimentsRes.error ||
-            signalsRes.error ||
-            'Không kết nối được tới dịch vụ dữ liệu'
-          }
-        />
-      )}
+      {error && <ErrorBanner message={error} />}
 
-      <div className="grid-cols-3" style={{ marginBottom: 24 }}>
-        <Card>
-          <div className="stat-label">Trạng thái dịch vụ</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
-            <Badge variant={health?.status === 'ok' ? 'success' : 'error'}>
-              {health ? (health.status === 'ok' ? 'Hoạt động' : 'Có lỗi') : 'Không có dữ liệu'}
+      <div className="grid-3">
+        <Card compact>
+          <div className="stat-label">Dịch vụ dữ liệu</div>
+          <div className="row" style={{ marginTop: 4 }}>
+            <Badge variant={health ? (serviceOk ? 'success' : 'error') : 'neutral'}>
+              {health ? (serviceOk ? 'Đang hoạt động' : 'Có lỗi') : 'Chưa có dữ liệu'}
             </Badge>
-            <span style={{ fontSize: 13, color: 'var(--ink-muted)' }}>
-              Cơ sở dữ liệu: {health?.database_status === 'ok' ? 'Hoạt động' : health?.database_status === 'connected' ? 'Đã kết nối' : health?.database_status ? 'Có lỗi' : 'Không có dữ liệu'}
-            </span>
           </div>
-          <div className="stat-subtext" style={{ marginTop: 8 }}>
-            Hệ quản trị: {health?.engine || 'Không có dữ liệu'} • {health?.timestamp_utc ? health.timestamp_utc.slice(11, 19) + ' UTC' : 'Không có dữ liệu'}
+          <div className="stat-subtext">
+            {health ? `Cập nhật ${formatIsoDateTime(health.timestamp_utc)} (UTC+7)` : 'Không kết nối được dịch vụ'}
           </div>
         </Card>
-
-        <Card>
-          <div className="stat-label">Bản dữ liệu gần đây (tối đa 5)</div>
-          <div className="stat-value">{snapshotsRes.error ? 'Không tải được' : snapshots.length}</div>
-          <div className="stat-subtext">
-            <Link href="/data">Xem lịch sử giá →</Link>
-          </div>
+        <Card compact>
+          <StatBox
+            label="Bộ dữ liệu gần đây"
+            value={snapshotsRes.error ? 'Không tải được' : formatInt(snapshots.length)}
+            subtext="Tối đa 5 bộ mới nhất"
+          />
         </Card>
-
-        <Card>
-          <div className="stat-label">Thử nghiệm gần đây (tối đa 5)</div>
-          <div className="stat-value">{experimentsRes.error ? 'Không tải được' : experiments.length}</div>
-          <div className="stat-subtext">
-            <Link href="/research">Xem kết quả thử nghiệm →</Link>
-          </div>
+        <Card compact>
+          <StatBox
+            label="Nến mới nhất"
+            value={latest ? formatDate(latest.end_time_ms) : 'Chưa có dữ liệu'}
+            subtext={latest ? `${latest.symbol} · ${latest.timeframe}` : 'Tải dữ liệu ở trang Lịch sử giá'}
+          />
         </Card>
       </div>
 
-      <div className="grid-cols-2">
-        <Card>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <h3 style={{ fontSize: 18, fontWeight: 600 }}>Bản dữ liệu gần đây</h3>
-            <Link href="/data" className="nav-link" style={{ fontWeight: 500 }}>
-              Xem lịch sử giá →
-            </Link>
-          </div>
-          {snapshotsRes.error ? (
-            <p style={{ fontSize: 14, color: 'var(--ink-muted)' }}>Không tải được danh sách bản dữ liệu.</p>
-          ) : snapshots.length === 0 ? (
-            <p style={{ fontSize: 14, color: 'var(--ink-muted)' }}>Chưa có bản dữ liệu nào được ghi nhận.</p>
-          ) : (
+      <div className="grid-3">
+        {STEPS.map((step, i) => (
+          <Card key={step.href} compact>
+            <div className="stack-sm">
+              <span className="stat-label">Bước {i + 1}</span>
+              <h2 className="card-title">{step.title}</h2>
+              <p className="card-sub">{step.text}</p>
+              <Link href={step.href} className="link-more">
+                Mở {step.title.toLowerCase()} →
+              </Link>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <Card>
+        <div className="spread" style={{ marginBottom: 12 }}>
+          <h2 className="card-title">Bộ dữ liệu giá gần đây</h2>
+          <Link href="/data" className="link-more">
+            Xem tất cả →
+          </Link>
+        </div>
+        {snapshotsRes.error ? (
+          <EmptyState message="Không tải được danh sách bộ dữ liệu." />
+        ) : snapshots.length === 0 ? (
+          <EmptyState
+            message="Chưa có bộ dữ liệu giá nào."
+            actionLabel="Tải dữ liệu giá"
+            actionHref="/data"
+          />
+        ) : (
+          <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
                   <th>Cặp giao dịch</th>
                   <th>Số nến</th>
-                  <th>Mã kiểm tra SHA-256</th>
+                  <th>Từ ngày</th>
+                  <th>Đến ngày</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
-                {snapshots.slice(0, 3).map((s) => (
+                {snapshots.map((s) => (
                   <tr key={s.id}>
-                    <td>{s.symbol} ({s.timeframe})</td>
-                    <td>{s.candle_count.toLocaleString()}</td>
                     <td>
-                      <code className="code-snippet">{s.sha256.slice(0, 10)}…</code>
+                      {s.symbol} · {s.timeframe}
+                    </td>
+                    <td>{formatInt(s.candle_count)}</td>
+                    <td>{formatDate(s.start_time_ms)}</td>
+                    <td>{formatDate(s.end_time_ms)}</td>
+                    <td>
+                      <Link href={`/data?snapshot_id=${s.id}`}>Xem</Link>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          )}
-        </Card>
-
-        <Card>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-            <h3 style={{ fontSize: 18, fontWeight: 600 }}>Dự đoán gần đây</h3>
-            <Link href="/signals" className="nav-link" style={{ fontWeight: 500 }}>
-              Xem tất cả dự đoán →
-            </Link>
           </div>
-          {signalsRes.error ? (
-            <p style={{ fontSize: 14, color: 'var(--ink-muted)' }}>Không tải được danh sách dự đoán.</p>
-          ) : signals.length === 0 ? (
-            <p style={{ fontSize: 14, color: 'var(--ink-muted)' }}>Chưa có dự đoán nào được ghi nhận.</p>
-          ) : (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Thời gian (UTC)</th>
-                  <th>Hướng</th>
-                  <th>Trạng thái</th>
-                </tr>
-              </thead>
-              <tbody>
-                {signals.slice(0, 3).map((sig) => (
-                  <tr key={sig.id}>
-                    <td>{new Date(sig.prediction_time_ms).toISOString().slice(11, 16)}</td>
-                    <td>
-                      <Badge variant={sig.predicted_class === 'UP' ? 'success' : 'neutral'}>
-                        {sig.predicted_class === 'UP' ? 'Tăng' : sig.predicted_class === 'DOWN' ? 'Giảm' : sig.predicted_class}
-                      </Badge>
-                    </td>
-                    <td>
-                      <Badge variant={sig.status === 'EVALUATED' ? 'success' : 'warning'}>
-                        {sig.status === 'EVALUATED' ? 'Đã đánh giá' : sig.status === 'PENDING' ? 'Chờ đánh giá' : sig.status}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </Card>
-      </div>
+        )}
+      </Card>
     </div>
   );
 }

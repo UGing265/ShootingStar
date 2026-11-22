@@ -1,58 +1,35 @@
 import React from 'react';
 import { fetchFromApi } from '@/shared/api-client';
-import { CandleDTO, SnapshotSummary } from '@/features/data/types';
+import { EmptyState, ErrorBanner, PageHeader } from '@/shared/ui/primitives';
+import type { CandleDTO, SnapshotSummary } from '@/features/data/types';
 import { ReplayPlayer } from '@/features/replay/replay-player';
+import { WINDOW_CANDLES, windowStartMs } from '@/features/replay/replay-utils';
 
 export default async function ReplayPage() {
   const result = await fetchFromApi<SnapshotSummary[]>('/snapshots');
-  const snapshots = result.data || [];
+  const snapshots = result.data ?? [];
 
   let initialCandles: CandleDTO[] = [];
   if (snapshots.length > 0) {
-    const candlesRes = await fetchFromApi<CandleDTO[]>(`/snapshots/${snapshots[0].id}/candles`, {
-      limit: 1000,
-    });
-    initialCandles = candlesRes.data || [];
+    const first = snapshots[0];
+    const candlesRes = await fetchFromApi<CandleDTO[]>(`/snapshots/${first.id}/candles`, { start_ms: windowStartMs(first, null), limit: WINDOW_CANDLES });
+    initialCandles = candlesRes.data ?? [];
   }
-  return (
-    <div className="page-container" style={{ padding: '24px 32px' }}>
-      <header className="page-header" style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, margin: '0 0 6px 0', color: 'var(--text-primary, #0f172a)' }}>
-          Mô phỏng dự đoán (Historical Simulation)
-        </h1>
-        <p style={{ margin: 0, color: 'var(--text-secondary, #64748b)', fontSize: 14 }}>
-          Mô phỏng dự đoán điểm mua trong lịch sử với bảo chứng không nhìn trước (Zero-Lookahead), so sánh AI và dự đoán cá nhân, chấm điểm độc lập khi có kết quả thực tế.
-        </p>
-      </header>
 
+  return (
+    <div className="page">
+      <PageHeader
+        title="Mô phỏng"
+        description="Quay lại một thời điểm trong quá khứ, xem phân tích chỉ từ nến đã đóng, đưa ra dự đoán rồi đối chiếu với diễn biến thật."
+      />
+      {result.error && <ErrorBanner message={result.error} />}
       {snapshots.length === 0 ? (
-        <div
-          style={{
-            padding: 32,
-            textAlign: 'center',
-            background: '#ffffff',
-            borderRadius: 8,
-            border: '1px solid #e2e8f0',
-          }}
-        >
-          <p style={{ margin: '0 0 12px 0', color: '#64748b', fontSize: 15 }}>
-            Chưa có snapshot nào trong cơ sở dữ liệu để bắt đầu phiên tua nến.
-          </p>
-          <a
-            href="/data"
-            style={{
-              display: 'inline-block',
-              padding: '8px 18px',
-              background: '#2563eb',
-              color: '#ffffff',
-              borderRadius: 6,
-              textDecoration: 'none',
-              fontWeight: 600,
-              fontSize: 14,
-            }}
-          >
-            Tải snapshot mới từ Binance tại trang Lịch sử giá →
-          </a>
+        <div className="card">
+          <EmptyState
+            message="Chưa có bộ dữ liệu giá nào để mô phỏng."
+            actionLabel="Tải dữ liệu ở trang Lịch sử giá"
+            actionHref="/data"
+          />
         </div>
       ) : (
         <ReplayPlayer snapshots={snapshots} initialCandles={initialCandles} />

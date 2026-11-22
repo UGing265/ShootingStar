@@ -1,0 +1,17 @@
+.replay-chart-actions {
+  display: inline-flex;
+  gap: var(--sp-2);
+}
+
+.replay-chart-canvas {
+  user-select: none;
+  cursor: default;
+}
+
+.replay-chart-canvas-select {
+  cursor: crosshair;
+}
+
+.replay-chart-canvas-dragging {
+  cursor: grabbing;
+}

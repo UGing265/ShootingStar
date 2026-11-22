@@ -1,6 +1,6 @@
 import React from 'react';
 import { fetchFromApi } from '@/shared/api-client';
-import { Card, ErrorBanner } from '@/shared/ui/primitives';
+import { Card, ErrorBanner, PageHeader, EmptyState } from '@/shared/ui/primitives';
 import {
   IngestionRunSummary,
   SnapshotSummary,
@@ -14,6 +14,8 @@ import {
 } from '@/features/data/components';
 import { CandlestickChart } from '@/features/data/candlestick-chart';
 import { SnapshotDownloader } from '@/features/data/snapshot-downloader';
+import '@/features/data/data.css';
+
 interface DataPageProps {
   searchParams?: Promise<{
     snapshot_id?: string;
@@ -59,24 +61,22 @@ export default async function DataPage(props: DataPageProps) {
     detailError = qualRes.error || candlesRes.error;
   }
 
+  const loadError = runsRes.error || snapshotsRes.error || detailError;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
-      <div className="page-header">
-        <h1 className="page-title">Lịch sử giá</h1>
-        <p className="page-description">
-          Dữ liệu nến lịch sử đã lưu trong các bản dữ liệu Parquet; xem mã kiểm tra SHA-256, khoảng thiếu nến và chất lượng dữ liệu. Đây không phải giá thị trường trực tiếp.
-        </p>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="Lịch sử giá"
+        description="Nến lịch sử đã lưu: kiểm tra khoảng thiếu nến và chất lượng dữ liệu. Đây không phải giá thị trường trực tiếp."
+      />
 
-      {(runsRes.error || snapshotsRes.error || detailError) && (
-        <ErrorBanner message={runsRes.error || snapshotsRes.error || detailError || 'Không tải được dữ liệu giá đã lưu'} />
-      )}
-
+      {loadError && <ErrorBanner message={loadError} />}
 
       <SnapshotDownloader />
+
       {quality && <QualityCard quality={quality} />}
 
-      {targetSnapshotId && (
+      {targetSnapshotId ? (
         <CandlestickChart
           initialCandles={candles}
           timeframe={targetSnap?.timeframe || '1m'}
@@ -94,15 +94,24 @@ export default async function DataPage(props: DataPageProps) {
             candle_count: s.candle_count,
           }))}
         />
+      ) : (
+        <Card>
+          <EmptyState title="Chưa có dữ liệu giá" message="Tải một bộ dữ liệu ở phía trên." />
+        </Card>
       )}
 
       <Card>
-        <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 16 }}>Bản dữ liệu Parquet</h2>
-        <SnapshotsView snapshots={snapshots} selectedId={targetSnapshotId || undefined} />
+        <div className="stack">
+          <h2 className="card-title">Bộ dữ liệu đã lưu</h2>
+          <SnapshotsView snapshots={snapshots} selectedId={targetSnapshotId || undefined} />
+        </div>
       </Card>
+
       <Card>
-        <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 16 }}>Lần nạp dữ liệu</h2>
-        <IngestionRunsView runs={runs} />
+        <div className="stack">
+          <h2 className="card-title">Lần nạp dữ liệu</h2>
+          <IngestionRunsView runs={runs} />
+        </div>
       </Card>
     </div>
   );

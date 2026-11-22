@@ -1,7 +1,14 @@
 import React from 'react';
 import Link from 'next/link';
 import { Card, Badge, StatBox, EmptyState } from '@/shared/ui/primitives';
-import { IngestionRunSummary, SnapshotSummary, SnapshotQualityResponse, CandleDTO } from './types';
+import { formatDateTime, formatInt, formatIsoDateTime } from '@/shared/format';
+import { IngestionRunSummary, SnapshotSummary, SnapshotQualityResponse } from './types';
+
+/** Coverage ratio (0..1) → `99.85%`; `Chưa có dữ liệu` when missing. */
+export function formatCoverage(ratio: number | null | undefined): string {
+  if (ratio === null || ratio === undefined || Number.isNaN(ratio)) return 'Chưa có dữ liệu';
+  return `${(ratio * 100).toFixed(2)}%`;
+}
 
 export function IngestionRunsView({ runs }: { runs: IngestionRunSummary[] }) {
   if (runs.length === 0) {
@@ -9,23 +16,24 @@ export function IngestionRunsView({ runs }: { runs: IngestionRunSummary[] }) {
   }
 
   return (
-    <div className="table-responsive">
+    <div className="table-wrap">
       <table className="data-table">
         <thead>
           <tr>
-            <th>Cặp giao dịch / khung thời gian</th>
-            <th>Tính toàn vẹn</th>
-            <th>Khoảng thời gian (UTC)</th>
+            <th>Cặp / khung nến</th>
+            <th>Chất lượng</th>
+            <th>Khoảng thời gian (UTC+7)</th>
             <th>Số nến hợp lệ</th>
-            <th>Số khoảng thiếu</th>
-            <th>Thời điểm nạp</th>
+            <th>Bao phủ</th>
+            <th>Khoảng thiếu</th>
+            <th>Thời điểm nạp (UTC+7)</th>
           </tr>
         </thead>
         <tbody>
           {runs.map((r) => (
             <tr key={r.id}>
               <td>
-                <strong>{r.symbol}</strong> ({r.timeframe})
+                <strong>{r.symbol}</strong> · {r.timeframe}
               </td>
               <td>
                 <Badge variant={r.is_pristine ? 'success' : 'warning'}>
@@ -33,12 +41,12 @@ export function IngestionRunsView({ runs }: { runs: IngestionRunSummary[] }) {
                 </Badge>
               </td>
               <td>
-                {new Date(r.start_time_ms).toISOString().slice(0, 16)} →{' '}
-                {new Date(r.end_time_ms).toISOString().slice(0, 16)}
+                {formatDateTime(r.start_time_ms)} → {formatDateTime(r.end_time_ms)}
               </td>
-              <td>{r.valid_candles_count.toLocaleString()}</td>
-              <td>{r.missing_intervals_count}</td>
-              <td>{r.created_at.slice(0, 19).replace('T', ' ')}</td>
+              <td>{formatInt(r.valid_candles_count)}</td>
+              <td>{formatCoverage(r.coverage_ratio)}</td>
+              <td>{formatInt(r.missing_intervals_count)}</td>
+              <td>{formatIsoDateTime(r.created_at)}</td>
             </tr>
           ))}
         </tbody>
@@ -55,49 +63,43 @@ export function SnapshotsView({
   selectedId?: string;
 }) {
   if (snapshots.length === 0) {
-    return <EmptyState title="Chưa có bản chụp dữ liệu" message="Chưa tìm thấy tệp Parquet bản chụp dữ liệu trong kho lưu trữ." />;
+    return <EmptyState title="Chưa có bộ dữ liệu" message="Chưa có bộ dữ liệu giá nào được lưu." />;
   }
 
   return (
-    <div className="table-responsive">
+    <div className="table-wrap">
       <table className="data-table">
         <thead>
           <tr>
-            <th>ID bản chụp</th>
-            <th>Cặp giao dịch / khung thời gian</th>
+            <th>Mã</th>
+            <th>Cặp / khung nến</th>
             <th>Số nến</th>
-            <th>Khoảng thời gian (UTC)</th>
-            <th>SHA-256</th>
-            <th>Thao tác</th>
+            <th>Khoảng thời gian (UTC+7)</th>
+            <th>
+              <span className="visually-hidden">Thao tác</span>
+            </th>
           </tr>
         </thead>
         <tbody>
-          {snapshots.map((s) => {
-            const isSelected = s.id === selectedId;
-            return (
-              <tr key={s.id} style={isSelected ? { background: 'var(--surface-pearl)' } : undefined}>
-                <td>
-                  <strong>{s.id.slice(0, 12)}…</strong>
-                </td>
-                <td>
-                  {s.symbol} ({s.timeframe})
-                </td>
-                <td>{s.candle_count.toLocaleString()}</td>
-                <td>
-                  {new Date(s.start_time_ms).toISOString().slice(0, 10)} →{' '}
-                  {new Date(s.end_time_ms).toISOString().slice(0, 10)}
-                </td>
-                <td>
-                  <code className="code-snippet">{s.sha256.slice(0, 10)}…</code>
-                </td>
-                <td>
-                  <Link href={`/data?snapshot_id=${s.id}`} className="nav-link" style={{ fontWeight: 500 }}>
-                    Xem chi tiết →
-                  </Link>
-                </td>
-              </tr>
-            );
-          })}
+          {snapshots.map((s) => (
+            <tr key={s.id} aria-selected={s.id === selectedId}>
+              <td>
+                <span className="data-id">{s.id.slice(0, 8)}</span>
+              </td>
+              <td>
+                <strong>{s.symbol}</strong> · {s.timeframe}
+              </td>
+              <td>{formatInt(s.candle_count)}</td>
+              <td>
+                {formatDateTime(s.start_time_ms)} → {formatDateTime(s.end_time_ms)}
+              </td>
+              <td>
+                <Link href={`/data?snapshot_id=${s.id}`} className="link-more">
+                  Xem
+                </Link>
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
@@ -105,76 +107,40 @@ export function SnapshotsView({
 }
 
 export function QualityCard({ quality }: { quality: SnapshotQualityResponse }) {
-  const coverageText =
-    quality.coverage_ratio !== null ? `${(quality.coverage_ratio * 100).toFixed(2)}%` : 'Chưa có dữ liệu';
   const qualityStatus: Record<string, string> = {
     VERIFIED_PRISTINE: 'Đã xác minh: không thiếu khoảng',
     VERIFIED_WITH_GAPS: 'Đã xác minh: có khoảng thiếu',
-    UNAVAILABLE_NO_INGESTION_RUN: 'Chưa có lần nạp dữ liệu để xác minh',
+    UNAVAILABLE_NO_INGESTION_RUN: 'Chưa có lần nạp để xác minh',
   };
   const gapStatus: Record<string, string> = {
-    UNAVAILABLE_NOT_PERSISTED: 'Không có danh sách khoảng thiếu được lưu',
+    UNAVAILABLE_NOT_PERSISTED: 'Danh sách khoảng thiếu chưa được lưu.',
   };
+  const badgeVariant =
+    quality.is_pristine === true ? 'success' : quality.is_pristine === false ? 'warning' : 'neutral';
+
   return (
     <Card>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <div>
-          <h3 style={{ fontSize: 18, fontWeight: 600 }}>Chất lượng bản chụp dữ liệu</h3>
-          <p style={{ fontSize: 13, color: 'var(--ink-muted)', marginTop: 4 }}>
-            Bản chụp: <code className="code-snippet">{quality.snapshot_id}</code>
-          </p>
+      <div className="stack">
+        <div className="spread">
+          <div>
+            <h2 className="card-title">Chất lượng bộ dữ liệu</h2>
+            <p className="card-sub">
+              Mã: <span className="data-id">{quality.snapshot_id.slice(0, 8)}</span> · {quality.symbol} · {quality.timeframe}
+            </p>
+          </div>
+          <Badge variant={badgeVariant}>{qualityStatus[quality.quality_status] ?? quality.quality_status}</Badge>
         </div>
-        <Badge variant={quality.is_pristine === true ? 'success' : 'warning'}>
-          {qualityStatus[quality.quality_status] ?? quality.quality_status}
-        </Badge>
-      </div>
 
-      <div className="grid-cols-4" style={{ marginBottom: 16 }}>
-        <StatBox label="Tỷ lệ bao phủ" value={coverageText} />
-        <StatBox label="Số khoảng thiếu" value={quality.missing_intervals_count ?? 'Chưa có dữ liệu'} />
-        <StatBox label="Số nến trùng" value={quality.duplicate_candles_count ?? 'Chưa có dữ liệu'} />
-        <StatBox label="Danh sách khoảng thiếu" value={gapStatus[quality.gap_list_status] ?? quality.gap_list_status} />
-      </div>
-      <div style={{ fontSize: 12, color: 'var(--ink-muted)' }}>
-        SHA-256 dùng để nhận diện nội dung bản chụp; chỉ số chất lượng chưa có dữ liệu sẽ không được suy đoán.
+        <div className="grid-3">
+          <StatBox label="Tỷ lệ bao phủ" value={formatCoverage(quality.coverage_ratio)} />
+          <StatBox label="Khoảng thiếu" value={formatInt(quality.missing_intervals_count)} />
+          <StatBox label="Nến trùng" value={formatInt(quality.duplicate_candles_count)} />
+        </div>
+
+        <p className="hint">
+          {gapStatus[quality.gap_list_status] ?? quality.gap_list_status} Chỉ số chưa có dữ liệu được ghi là “Chưa có dữ liệu”, không suy đoán.
+        </p>
       </div>
     </Card>
-  );
-}
-
-export function CandleTable({ candles }: { candles: CandleDTO[] }) {
-  if (candles.length === 0) {
-    return <EmptyState title="Chưa tải nến" message="Chọn bản chụp dữ liệu để xem trước một số nến." />;
-  }
-
-  return (
-    <div className="table-responsive">
-      <table className="data-table">
-        <thead>
-          <tr>
-            <th>Thời gian (UTC)</th>
-            <th>Giá mở cửa</th>
-            <th>Giá cao nhất</th>
-            <th>Giá thấp nhất</th>
-            <th>Giá đóng cửa</th>
-            <th>Khối lượng</th>
-            <th>Số giao dịch</th>
-          </tr>
-        </thead>
-        <tbody>
-          {candles.slice(0, 20).map((c) => (
-            <tr key={c.open_time_ms}>
-              <td>{new Date(c.open_time_ms).toISOString().slice(11, 19)}</td>
-              <td>${c.open.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-              <td>${c.high.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-              <td>${c.low.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-              <td>${c.close.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-              <td>{c.volume.toFixed(4)}</td>
-              <td>{c.trades_count}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
   );
 }

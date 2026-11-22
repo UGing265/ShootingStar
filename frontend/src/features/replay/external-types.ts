@@ -21,23 +21,13 @@ export interface ExternalModelPredictionOutput {
   direction: 'UP' | 'DOWN' | 'ABSTAIN';
   rationale: string;
   evidence_candle_times: number[];
-  lesson_ids: string[];
-  probability_up: number | null;
-  probability_down: number | null;
   model_id: string;
   prompt_version: string;
-  key_index?: number | null;
-  prompt_tokens?: number | null;
-  completion_tokens?: number | null;
-  estimated_cost_usd?: number | null;
 }
 
 export interface PatternCriterion {
   criterion_id: string;
   description: string;
-  source_id_or_locator: string;
-  rule_origin: string;
-  formula_or_params: string;
   measured_value: number;
   expected_relation: string;
   status: 'PASS' | 'FAIL' | 'UNKNOWN';
@@ -48,8 +38,6 @@ export interface PatternDiagnostic {
   pattern_id: string;
   candidate_id: string;
   rule_version: string;
-  feed_hash: string;
-  candle_ids: string[];
   shape_status: 'PASS' | 'FAIL' | 'UNKNOWN';
   context_status: 'PASS' | 'FAIL' | 'UNKNOWN';
   confirmation_status: string;
@@ -57,18 +45,6 @@ export interface PatternDiagnostic {
   conflicts: string[];
   limitations: string[];
   criteria: PatternCriterion[];
-}
-
-export interface StageRecord {
-  stage_name: string;
-  role: string;
-  status: string;
-  started_at_iso?: string;
-  ended_at_iso?: string;
-  output_hash?: string;
-  search_provider?: string;
-  queries_executed?: string[];
-  patterns_checked?: number;
 }
 
 export interface ResearchSourceItem {
@@ -94,9 +70,7 @@ export interface ReportSections {
 
 export interface EvidenceEnvelopeDTO {
   protocol_version: string;
-  feed?: Record<string, unknown>;
-  stages?: StageRecord[];
-  hypothesis?: Record<string, unknown>;
+  feed?: { features?: Array<{ feature_id: string; value: number }> } & Record<string, unknown>;
   research?: {
     search_provider?: string;
     queries_executed?: string[];
@@ -112,7 +86,6 @@ export interface EvidenceEnvelopeDTO {
 export interface ExternalAnalysisJobDTO {
   id: string;
   snapshot_id: string;
-  snapshot_hash: string;
   symbol: string;
   timeframe: string;
   prediction_time_t_ms: number;
@@ -121,7 +94,7 @@ export interface ExternalAnalysisJobDTO {
   context_variant: ExternalContextVariant;
   mode: ExternalAnalysisMode;
   status: ExternalAnalysisStatus;
-  created_at_ms: number;
+  created_at_iso: string;
   ai_prediction: ExternalModelPredictionOutput | null;
   user_vote: 'UP' | 'DOWN' | null;
   outcome: 'UP' | 'DOWN' | 'FLAT' | 'PENDING' | 'UNSCORABLE' | null;
@@ -130,5 +103,4 @@ export interface ExternalAnalysisJobDTO {
   error_message: string | null;
   leakage_risk_banner: boolean;
   evidence_envelope?: EvidenceEnvelopeDTO | null;
-  stages?: StageRecord[] | null;
 }
