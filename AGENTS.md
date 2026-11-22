@@ -18,7 +18,7 @@ Tài liệu này là quy chuẩn bắt buộc dành cho AI Agents khi làm việ
 
 ## 2. Kiến trúc & Phân chia Trách nhiệm (Tech Stack)
 
-- **Backend:** Python 3.11+, FastAPI, SQLAlchemy/Alembic, PostgreSQL hoặc SQLite theo `SHOOTINGSTAR_DATABASE_URL` (test dùng `SHOOTINGSTAR_TEST_DATABASE_URL`), Parquet cho snapshot; không có DB mặc định nếu thiếu biến môi trường.
+- **Backend:** Python 3.11+, FastAPI, SQLAlchemy/Alembic, PostgreSQL hoặc SQLite theo `SHOOTINGSTAR_DATABASE_URL` (test chạy thẳng trên DB chính `SHOOTINGSTAR_DATABASE_URL`: test chỉ tạo dòng với id riêng và xoá đúng các dòng đó trong `finally`; cấm xoá hàng loạt, TRUNCATE, DROP, downgrade; backup bằng `pg_dump` trước đợt thay đổi lớn), Parquet cho snapshot; không có DB mặc định nếu thiếu biến môi trường.
 - **Luồng nghiệp vụ:** `backend/shootingstar/cli/` (`argparse`) và `api/` (FastAPI read API) gọi `application/` (ingestion, features, labels, evaluation, experiments, patterns, signals). `domain/` giữ model/quy tắc; `adapters/` làm việc với Binance, file snapshot và SQLAlchemy DB. CLI `shootingstar --help` đăng ký qua `pyproject.toml`.
 - **Frontend:** Next.js App Router, TypeScript, React và CSS tại `frontend/`; `src/app/` định tuyến/ghép trang, `src/features/` giữ UI theo mảng, `src/shared/api-client.ts` gọi FastAPI **chỉ ở server** qua `SHOOTINGSTAR_API_URL`. Browser không tính lại metric, đọc trực tiếp DB/Parquet hoặc gọi API với thông tin nội bộ.
 - **Trạng thái sản phẩm:** Trang giới thiệu không trình bày chỉ số chưa kiểm chứng; các trang làm việc hiển thị dữ liệu thật/thiếu dữ liệu từ API. News/agents, paper trading, action policy `NO_TRADE` theo chi phí và P&L sau slippage chưa được coi là chức năng đã nghiệm thu.
@@ -41,8 +41,9 @@ Mọi đầu việc lớn, phase nghiên cứu mới hoặc đợt tái cấu tr
 - `docs/DESIGN.md`: Ngôn ngữ thiết kế trực quan (Light/Parchment palette, interactive blue, hairline border, shadow-free, typography chuẩn). Mọi UI Next.js bắt buộc tham chiếu file này.
 - `docs/external-apis.md`: Sổ đăng ký tích hợp API bên ngoài (Binance Spot REST API, rate weights, headers, error handling).
 - `docs/binance-spot-fees.md`: Quy chuẩn phí giao dịch VIP 0, Maker/Taker và slippage assumptions.
-- `docs/backend/README.md`: Hướng dẫn cấu hình DB, chạy migration Alembic, biến môi trường và chạy test API.
-- `docs/frontend/README.md`: Hướng dẫn cấu hình `frontend/`, Node.js, biến môi trường `SHOOTINGSTAR_API_URL` và kiến trúc `features/`.
+- `docs/run-backend.md`: Hướng dẫn cấu hình DB, chạy migration Alembic, biến môi trường, chạy backend và test API.
+- `docs/run-frontend.md`: Hướng dẫn cấu hình `frontend/`, Node.js, biến môi trường `SHOOTINGSTAR_API_URL`, chạy dev/build và E2E Playwright.
+- `docs/systemmd/`: Bản đồ kiến trúc toàn hệ thống (backend, frontend, API, DB, luồng, thư mục). Đọc trước khi khảo sát code.
 - `docs/local-run.md`: Hướng dẫn khởi chạy song song Backend + Frontend cục bộ.
 
 ---
@@ -68,6 +69,12 @@ Mọi đầu việc lớn, phase nghiên cứu mới hoặc đợt tái cấu tr
      - **Kéo giữ chuột trái (Click & Hold / Drag):** Trượt qua lại (Pan left / right) để duyệt dữ liệu.
      - **Click chọn mốc (Click Selection):** Phân biệt rõ thao tác kéo (drag) và nhấp chuột (click) bằng ngưỡng dịch chuyển chuột để không kích hoạt click ngoài ý muốn khi kéo.
    - **Múi giờ chuẩn:** Giao diện hiển thị người dùng và biểu đồ mặc định thống nhất theo **UTC+7** (Asia/Ho_Chi_Minh); Backend API, Database và Parquet lưu trữ gốc theo mốc chuẩn UTC / epoch millisecond.
+7. **Đọc `AGENTS.md` trước khi làm (BẮT BUỘC):**
+   - Mọi agent, kể cả subagent và worker điều phối qua Orca, phải đọc `AGENTS.md` trước khi khảo sát, sửa file hoặc commit; đọc lại khi file đổi. Khi giao việc phải truyền quy định này, không chỉ dựa vào tóm tắt phiên trước.
+8. **Vị trí kế hoạch & báo cáo:**
+   - Kế hoạch, phase, báo cáo khảo sát/brainstorm đều nằm trong `docs/plans/<yymmdd>-<tên>/`. Không tạo thư mục `plans/` ở gốc repo.
+9. **UI cho người đọc, không cho máy đọc:**
+   - Không hiển thị UUID, hash nội bộ, token hay ID cơ sở dữ liệu thô. Thiếu thông tin thì hiện fallback rõ nghĩa (`Không xác định`, `Chưa cập nhật`). Mã nghiệp vụ có ý nghĩa (ví dụ id snapshot rút gọn kèm khoảng ngày để phân biệt) thì được phép.
 
 ---
 
