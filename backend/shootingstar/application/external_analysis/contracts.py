@@ -43,7 +43,6 @@ class ModelPredictionOutput:
     direction: AnalysisDirection
     rationale: str
     evidence_candle_times: List[int] = field(default_factory=list)
-    lesson_ids: List[str] = field(default_factory=list)
     probability_up: Optional[float] = None  # Strictly None pending probability calibration
     probability_down: Optional[float] = None
     model_id: str = "gemini-2.5-flash"

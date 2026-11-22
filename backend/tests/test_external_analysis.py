@@ -114,25 +114,21 @@ def test_context_serializers_a_and_b():
 # 3. Verifier Allowlist & Sanitization Tests
 def test_external_analysis_verifier_sanitization():
     valid_times = {1700000000000, 1700000300000, 1700000600000}
-    approved_lessons = {"lesson_head_and_shoulders", "lesson_double_bottom"}
 
     raw_payload = {
         "direction": "UP",
         "rationale": "Strong support bounce",
         "evidence_candle_times": [1700000000000, 9999999999999],  # 9999... is outside 6h
-        "lesson_ids": ["lesson_head_and_shoulders", "fake_unapproved_lesson"],
         "probability_up": 0.85,  # Fake uncalibrated probability
     }
 
     pred = ExternalAnalysisVerifier.verify(
         raw_payload=raw_payload,
         valid_candle_times=valid_times,
-        approved_lesson_ids=approved_lessons,
     )
 
     assert pred.direction == AnalysisDirection.UP
     assert pred.evidence_candle_times == [1700000000000]  # Hallucinated timestamp stripped!
-    assert pred.lesson_ids == ["lesson_head_and_shoulders"]  # Unapproved lesson stripped!
     assert pred.probability_up is None  # Probability strictly forced to None!
     assert pred.probability_down is None
 
@@ -648,7 +644,7 @@ def test_grounded_research_agent_and_sources():
     adapter = GeminiModelAdapter()
     hyp = adapter.analyze_preliminary(feed_contract_to_dict(feed), mock_mode=True)
 
-    research_agent = ResearchAgent(lesson_service=None, model_adapter=adapter)
+    research_agent = ResearchAgent(model_adapter=adapter)
     research_contract = research_agent.conduct_job_research(
         hypothesis=hyp,
         job_id="job_test_research",

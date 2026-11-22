@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set
 from shootingstar.adapters.db.models import ExternalAnalysisJobModel, SnapshotModel
 from shootingstar.adapters.db.repository import ExternalAnalysisJobRepository, SnapshotRepository
 from shootingstar.adapters.model_api.gemini_adapter import GeminiModelAdapter
-from shootingstar.adapters.storage import SnapshotStorage
+from shootingstar.adapters.storage import SnapshotStorage, resolve_snapshot_file_path
 from shootingstar.application.external_analysis.contracts import (
     AnalysisDirection,
     AnalysisMode,
@@ -53,14 +53,20 @@ class ExternalAnalysisService:
         snapshot_storage: SnapshotStorage,
         gemini_adapter: Optional[GeminiModelAdapter] = None,
         research_agent: Optional[ResearchAgent] = None,
-        approved_lessons: Optional[List[Dict[str, Any]]] = None,
     ):
         self.job_repo = job_repository
         self.snapshot_repo = snapshot_repository
         self.snapshot_storage = snapshot_storage
         self.gemini_adapter = gemini_adapter or GeminiModelAdapter()
-        self.research_agent = research_agent or ResearchAgent(lesson_service=None, model_adapter=self.gemini_adapter)  # type: ignore
-        self.approved_lessons = approved_lessons or []
+        self.research_agent = research_agent or ResearchAgent(model_adapter=self.gemini_adapter)
+
+    @staticmethod
+    def _snapshot_path(snap_rec: SnapshotModel) -> Path:
+        path = resolve_snapshot_file_path(snap_rec.file_path)
+        if path is None:
+            raise ValueError(f"Snapshot data file for '{snap_rec.id}' not found on disk.")
+        return path
+
     def create_analysis_job(
         self,
         request: ExternalAnalysisRequest,
@@ -73,7 +79,7 @@ class ExternalAnalysisService:
         if not snap_rec:
             raise ValueError(f"Snapshot with ID '{request.snapshot_id}' not found.")
 
-        candles = self.snapshot_storage.load_snapshot(Path(snap_rec.file_path))
+        candles = self.snapshot_storage.load_snapshot(self._snapshot_path(snap_rec))
         if not candles:
             raise ValueError(f"Snapshot data file for '{request.snapshot_id}' is empty or unreadable.")
 
@@ -153,7 +159,7 @@ class ExternalAnalysisService:
         if not snap_rec:
             raise ValueError(f"Snapshot with ID '{job.snapshot_id}' not found.")
 
-        candles = self.snapshot_storage.load_snapshot(Path(snap_rec.file_path))
+        candles = self.snapshot_storage.load_snapshot(self._snapshot_path(snap_rec))
         if not candles:
             raise ValueError(f"Snapshot data file for '{job.snapshot_id}' is empty or unreadable.")
 
@@ -339,7 +345,6 @@ class ExternalAnalysisService:
         job.direction = direction_str
         job.rationale = report_payload.get("rationale", "")
         job.evidence_times_json = json.dumps(report_payload.get("evidence_candle_times", []))
-        job.lesson_ids_json = json.dumps(report_payload.get("lesson_ids", []))
         job.raw_output_json = json.dumps(report_payload)
         job.evidence_envelope_json = json.dumps(envelope)
         job.prompt_tokens = report_payload.get("prompt_tokens")
@@ -380,7 +385,7 @@ class ExternalAnalysisService:
         snap_rec = self.snapshot_repo.get_by_id(job.snapshot_id)
         if not snap_rec:
             raise ValueError(f"Snapshot with ID '{job.snapshot_id}' not found.")
-        candles = self.snapshot_storage.load_snapshot(Path(snap_rec.file_path))
+        candles = self.snapshot_storage.load_snapshot(self._snapshot_path(snap_rec))
         tf = Timeframe(job.timeframe)
         horizon_ms = job.horizon_minutes * 60 * 1000
         target_time_ms = job.prediction_time_t_ms + horizon_ms
@@ -432,7 +437,6 @@ class ExternalAnalysisService:
     def _model_to_dto(self, job: ExternalAnalysisJobModel, leakage_banner: bool = False) -> ExternalAnalysisJobDTO:
         """Converts DB model to DTO. Outcome is strictly None unless is_revealed is True."""
         evidence_times = json.loads(job.evidence_times_json) if job.evidence_times_json else []
-        lesson_ids = json.loads(job.lesson_ids_json) if job.lesson_ids_json else []
         envelope_data = None
         stages_data = None
         if job.evidence_envelope_json:
@@ -448,7 +452,6 @@ class ExternalAnalysisService:
                 direction=AnalysisDirection(job.direction),
                 rationale=job.rationale or "",
                 evidence_candle_times=evidence_times,
-                lesson_ids=lesson_ids,
                 probability_up=None,
                 probability_down=None,
                 model_id=job.model_id,
