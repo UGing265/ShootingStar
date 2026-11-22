@@ -1,10 +1,32 @@
-# Nghiên cứu tạm: model API bên ngoài cho dự báo BTCUSDT
+# Dự báo Gemini 6h — thiết kế và giới hạn
 
-**Ngày nghiên cứu:** 2026-10-10  
-**Trạng thái:** Nghiên cứu để chuẩn bị [kế hoạch tích hợp API model ngoài](plans/261010-external-model-api-research/plan.md); **chưa triển khai, chưa chọn nhà cung cấp, chưa có kết quả đánh giá**, không thay gate `NO_MODEL` hiện tại.  
-**Liên quan:** [Kế hoạch replay](plans/261009-historical-replay-research/plan.md), [Phase 02 tự train](plans/261009-historical-replay-research/phase-02-model-window-research.md). Thiết kế tự train cũ đã gỡ cùng phần tự huấn luyện.
+## Triển khai hiện tại: `forecast-6h-v1`
 
-> **Cập nhật 2026-11-21:** lessons, Pattern Lab thống kê và model tự huấn luyện đã gỡ khỏi hệ thống. Các đoạn nhắc tới chúng dưới đây giữ làm ghi chép nghiên cứu.
+Backend nhận snapshot BTCUSDT, giá mua giả định và thời điểm `t`; mặc định horizon 360 phút, lookback 14 ngày. Chỉ nến `1m`/`5m` đã đóng `close_time_ms <= t` được đưa vào digest. Các bucket UTC `15m`, `1h`, `4h` phải đầy đủ; thiếu lịch sử liên tục trả `INSUFFICIENT_HISTORY`. EMA cần tối thiểu 207 giờ nến cho warm-up, kể cả khi lookback 7 ngày.
+
+Digest gồm slope EMA20/50 trên 1h và 4h, RSI14 trên 15m/1h, MACD histogram và ATR14% 1h, volume ratio, vị trí trong range 24h/7d/N ngày, high/low 24h và return 6h/24h/N ngày. Mỗi feature có ID, đơn vị, giá trị; `digest_hash` xác định payload. `agreement_score` đếm tín hiệu theo hướng, **không phải xác suất**.
+
+Một request logic tới `gemini-2.5-flash` theo mặc định, không web grounding. Schema yêu cầu `direction` UP/DOWN, `confidence` LOW/MEDIUM/HIGH, lý do trỏ feature ID và rủi ro. Confidence là nhãn model tự khai, chưa calibration. Verifier gắn cờ feature ID lạ hoặc con số trong lý do không khớp feature được trích; kiểm tra này không chứng minh dự báo đúng. Lỗi provider/schema không tạo dự báo thay thế. Retry transport có thể phát thêm HTTP request khi lỗi tạm thời.
+
+Nhãn outcome dùng giá đóng của nến chứa `t + horizon` so với giá mua: `abs(move_pct) < 0.5` là FLAT; thiếu nến là UNSCORABLE. Scoreboard loại FLAT và UNSCORABLE, so Gemini, always-UP, momentum 6h trên cùng tập đủ ba hướng; báo `n`, accuracy và Wilson 95%. `threshold_n` cho ngưỡng 0.3%, 0.5%, 1% là số outcome không FLAT có thể chấm, không phải số dự báo đủ baseline.
+
+Snapshot lịch sử là **nhận định hồi cứu**, không phải bằng chứng point-in-time khách quan: model có thể đã ghi nhớ dữ liệu tương lai. Flag `possible_memorization` bật với `gemini-2.5-flash` trước `2025-02-01T00:00:00Z`. Model không có cutoff trong mã không bị gắn cờ; điều đó **không** chứng minh an toàn khỏi memorization. Cần đo prospective khóa trước outcome, cùng baseline và đủ mẫu, trước khi kết luận.
+
+Chạy `forecast-batch --snapshot <id> --dry-run --limit 200` để chỉ đo baseline; không gọi Gemini hay ghi job. Bỏ `--dry-run` chỉ khi admin bật API và chấp nhận chi phí. Lệnh, xác thực và resume: [backend README](backend/README.md).
+
+**Baseline đã đo ngày 2026-11-22:** dry-run 2.580 mốc trên snapshot từ 2025-02-01 đến 2026-11-22; 1.273 mốc non-FLAT đủ chấm, always-UP 49,88%, momentum 6h 46,50%. Đây là kết quả baseline hồi cứu, không phải P&L. **Accuracy Gemini chưa được đo**; chưa thể kết luận Gemini thắng hay thua baseline.
+
+### Nguồn nghiên cứu và phạm vi
+
+- [Google: Gemini 2.5 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash.md.txt): nguồn cutoff 01/2025; mã dùng mốc đầu tháng sau, 2025-02-01 UTC, làm cờ thận trọng.
+- [Xiong và cộng sự, ICLR 2024](https://arxiv.org/abs/2306.13063): nghiên cứu verbalized confidence; không chứng minh nhãn confidence của forecast này đã hiệu chỉnh.
+- [Tang & Zhu](https://arxiv.org/html/2504.14765v2): rủi ro lookahead và ghi nhớ trong đánh giá LLM hồi cứu; prompt không đảm bảo loại bỏ.
+- [Tan và cộng sự, NeurIPS 2024](https://arxiv.org/abs/2406.16964): nghiên cứu kiến trúc dự báo chuỗi thời gian gắn LLM, **không** kiểm trực tiếp prompt Gemini đọc chỉ báo BTC.
+- [Liu & Tsyvinski](https://www.nber.org/papers/w24877): nghiên cứu nhân tố và momentum crypto, chỉ hỗ trợ gián tiếp việc thử nhiều lookback; không chứng minh 14 ngày tối ưu.
+
+## Lưu trữ: nghiên cứu ngày 2026-10-10
+
+Phần dưới là ghi chép lịch sử trước triển khai; lựa chọn, API, đường dẫn mã và trạng thái trong đó **không mô tả hệ thống hiện tại**. Xem phần triển khai phía trên làm nguồn hiện hành.
 
 ## Kết luận để ra quyết định
 
