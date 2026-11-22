@@ -16,6 +16,8 @@ from shootingstar.application.external_analysis.contracts import (
     ExternalAnalysisRequest,
 )
 from shootingstar.application.external_analysis.service import ExternalAnalysisService
+from shootingstar.api.schemas import ForecastScoreboardResponse
+from shootingstar.application.forecast.scoreboard import build_scoreboard
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +29,8 @@ class CreateAnalysisJobRequest(BaseModel):
     snapshot_id: str
     prediction_time_t_ms: int
     purchase_price_p: float
-    horizon_minutes: int = 30
+    horizon_minutes: int = Field(360, gt=0)
+    lookback_days: int = Field(14, gt=0, le=365)
     context_variant: str = "A"  # "A" or "B"
     mode: str = "RETROSPECTIVE"  # "RETROSPECTIVE" or "PROSPECTIVE"
     mock_mode: bool = False
@@ -59,6 +62,21 @@ def verify_admin_authorization(x_admin_key: Optional[str] = Header(None, alias="
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrator authentication required via X-Admin-Key header.",
         )
+
+
+@router.get("/scoreboard", response_model=ForecastScoreboardResponse)
+def forecast_scoreboard(snapshot_id: str, horizon: int = Query(360, gt=0),
+                        lookback_days: int = Query(14, gt=0, le=365),
+                        x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")):
+    verify_admin_authorization(x_admin_key)
+    with get_db_session() as session:
+        snapshot = SnapshotRepository(session).get_by_id(snapshot_id)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Snapshot not found")
+        try:
+            return build_scoreboard(session, snapshot, horizon, lookback_days)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @router.post("/jobs", status_code=status.HTTP_202_ACCEPTED)
@@ -97,6 +115,7 @@ def create_external_analysis_job(
             prediction_time_t_ms=req.prediction_time_t_ms,
             purchase_price_p=req.purchase_price_p,
             horizon_minutes=req.horizon_minutes,
+            lookback_days=req.lookback_days,
             context_variant=variant,
             mode=mode,
         )
