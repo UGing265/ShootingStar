@@ -6,6 +6,8 @@
  * - Preserves sign and ratio precision
  */
 
+import type { ForecastFeature } from '../replay/external-types';
+
 export function formatUtc7Date(ms: number | string | null | undefined): string {
   if (!ms) return '';
   const num = typeof ms === 'string' ? parseInt(ms, 10) : ms;
@@ -21,7 +23,7 @@ export function formatUtc7Date(ms: number | string | null | undefined): string {
 }
 
 export function formatPercentRatio(val: number | null | undefined): string {
-  if (val === null || val === undefined || isNaN(val)) return '—';
+  if (val === null || val === undefined || isNaN(val)) return 'Chưa có dữ liệu';
   // Avoid negative zero
   if (Object.is(val, -0) || Math.abs(val) < 1e-9) return '0%';
   const pct = val * 100;
@@ -32,12 +34,12 @@ export function formatPercentRatio(val: number | null | undefined): string {
 }
 
 export function formatUsdt(val: number | null | undefined): string {
-  if (val === null || val === undefined || isNaN(val)) return '—';
+  if (val === null || val === undefined || isNaN(val)) return 'Chưa có dữ liệu';
   return `${val.toLocaleString('vi-VN', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} USDT`;
 }
 
 export function formatBtc(val: number | null | undefined): string {
-  if (val === null || val === undefined || isNaN(val)) return '—';
+  if (val === null || val === undefined || isNaN(val)) return 'Chưa có dữ liệu';
   // Preserve nonzero small quantities
   const maxDecimals = Math.abs(val) < 0.0001 && val !== 0 ? 6 : 4;
   return `${val.toLocaleString('vi-VN', { minimumFractionDigits: 2, maximumFractionDigits: maxDecimals })} BTC`;
@@ -233,4 +235,71 @@ export function formatCanonicalFeatureTable(
   }
 
   return rows;
+}
+
+const FORECAST_FEATURE_NAMES: Record<string, string> = {
+  ema20_slope: 'Độ dốc EMA20',
+  ema50_slope: 'Độ dốc EMA50',
+  rsi14: 'RSI 14',
+  macd_hist: 'MACD histogram',
+  atr14_pct: 'ATR 14',
+  volume_ratio20: 'Tỷ lệ khối lượng 20 nến',
+  swing_high_24h: 'Đỉnh 24 giờ',
+  swing_low_24h: 'Đáy 24 giờ',
+};
+
+function forecastFeatureBaseName(name: string): string {
+  const known = FORECAST_FEATURE_NAMES[name];
+  if (known) return known;
+  const range = /^range_position_(\d+)([hd])$/.exec(name);
+  if (range) return `Vị trí giá trong biên ${range[1]} ${range[2] === 'd' ? 'ngày' : 'giờ'}`;
+  const ret = /^return_(\d+)([hd])$/.exec(name);
+  if (ret) return `Lợi nhuận ${ret[1]} ${ret[2] === 'd' ? 'ngày' : 'giờ'}`;
+  return name.replace(/_/g, ' ');
+}
+
+/** Readable Vietnamese label for a forecast digest feature. */
+export function forecastFeatureName(feature: ForecastFeature): string {
+  return `${forecastFeatureBaseName(feature.name)} (${feature.timeframe})`;
+}
+
+/** Formats a digest value using the unit declared by the backend. */
+export function formatForecastFeatureValue(feature: ForecastFeature): string {
+  const value = feature.value;
+  if (value === null || value === undefined || Number.isNaN(value)) return 'Chưa có dữ liệu';
+  if (Math.abs(value) < 1e-9) return feature.unit === '%' ? '0%' : '0';
+  if (feature.unit === 'price') return formatUsdt(value);
+  if (feature.unit === '%') {
+    const sign = value > 0 ? '+' : '';
+    return `${sign}${value.toFixed(4).replace(/\.?0+$/, '')}%`;
+  }
+  if (feature.unit === 'index') return value.toFixed(2);
+  if (feature.name.startsWith('volume_ratio')) return `${value.toFixed(2)} lần`;
+  if (feature.name.startsWith('range_position')) return `${(value * 100).toFixed(1)}%`;
+  return value.toFixed(4);
+}
+
+/** Replaces raw feature ids in model prose with readable labels. */
+export function replaceForecastFeatureIds(text: string, features: ForecastFeature[]): string {
+  let result = text;
+  for (const feature of features) {
+    if (!feature.feature_id) continue;
+    result = result.split(feature.feature_id).join(forecastFeatureName(feature));
+  }
+  return result;
+}
+
+export interface ForecastCitation {
+  label: string;
+  value: string;
+}
+
+/** Turns cited feature ids into readable name/value pairs; never exposes the raw id. */
+export function forecastCitations(featureIds: string[], features: ForecastFeature[]): ForecastCitation[] {
+  const byId = new Map(features.map((feature) => [feature.feature_id, feature]));
+  return featureIds.map((featureId) => {
+    const feature = byId.get(featureId);
+    if (!feature) return { label: 'Chỉ số không xác định', value: 'Chưa có dữ liệu' };
+    return { label: forecastFeatureName(feature), value: formatForecastFeatureValue(feature) };
+  });
 }

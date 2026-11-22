@@ -2,8 +2,13 @@ import type { CandleDTO } from '../data/types';
 import type { StrategyEvaluationDTO } from './types';
 import type { StrategyLevelsProps } from './replay-chart';
 
-export const HORIZON_MINUTES = 30;
-export const REQUIRED_HISTORY_HOURS = 6;
+export const STRATEGY_HORIZON_MINUTES = 30;
+export const STRATEGY_REQUIRED_HISTORY_HOURS = 6;
+/** Forecast jobs predict the price 6 hours ahead. */
+export const FORECAST_HORIZON_MINUTES = 360;
+export const FORECAST_LOOKBACK_DAYS = 14;
+/** Digest warm-up: lookback days plus one bar, with a 207-hour floor. */
+export const FORECAST_REQUIRED_HISTORY_HOURS = Math.max(FORECAST_LOOKBACK_DAYS * 24 + 1, 207);
 /** Candles fetched per replay window; the picked candle sits at WINDOW_PICK_RATIO of it. */
 export const WINDOW_CANDLES = 1000;
 export const WINDOW_PICK_RATIO = 0.75;

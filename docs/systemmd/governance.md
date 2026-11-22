@@ -11,6 +11,8 @@ Quy tắc bắt buộc cho dev và AI agent. Mâu thuẫn thì `AGENTS.md` thắ
 5. Không commit/push khi chưa có lệnh user. Commit atomic, prefix `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`.
 6. Mọi kế hoạch lớn nằm ở `docs/plans/<yymmdd>-<tên>/plan.md`. Chỉ đánh dấu hoàn tất khi có output chạy thật.
 7. Thời gian: backend/DB/Parquet lưu UTC hoặc epoch millisecond; UI hiển thị UTC+7.
+8. Đánh giá LLM hồi cứu phải nêu nguy cơ memorization; không gọi confidence tự khai là xác suất đã hiệu chỉnh. So baseline trên cùng mẫu, công bố số mẫu, FLAT và dữ liệu thiếu.
+9. Pytest dùng DB chính: test chỉ tạo và xóa từng dòng do chính test tạo; cấm bulk delete, truncate, drop hoặc downgrade.
 
 ## Checklist tính năng mới
 

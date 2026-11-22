@@ -10,19 +10,16 @@ export const IN_PROGRESS_STATUSES: readonly ExternalAnalysisStatus[] = [
   'CALLING',
 ];
 
-/** Ordered pipeline stages shown while a report is being written. */
+/** Ordered forecast-6h-v1 stages shown while a report is being written. */
 export const PIPELINE_STEPS: ReadonlyArray<{ status: ExternalAnalysisStatus; label: string }> = [
-  { status: 'PREPARING_FEED', label: 'Chuẩn bị 6 giờ nến' },
-  { status: 'ANALYZING', label: 'Lập giả thuyết' },
-  { status: 'RESEARCHING', label: 'Tra cứu tài liệu' },
-  { status: 'MATCHING', label: 'Đối chiếu tiêu chí' },
-  { status: 'SYNTHESIZING', label: 'Viết báo cáo' },
+  { status: 'PREPARING_FEED', label: 'Chuẩn bị dữ liệu nến' },
+  { status: 'ANALYZING', label: 'Gọi Gemini và kiểm tra kết quả' },
 ];
 
 const STATUS_LABELS: Record<ExternalAnalysisStatus, string> = {
   PREPARING: 'Đang chuẩn bị',
-  PREPARING_FEED: 'Đang chuẩn bị 6 giờ nến',
-  ANALYZING: 'Đang lập giả thuyết',
+  PREPARING_FEED: 'Đang chuẩn bị dữ liệu nến',
+  ANALYZING: 'Đang gọi Gemini',
   RESEARCHING: 'Đang tra cứu tài liệu',
   MATCHING: 'Đang đối chiếu tiêu chí',
   SYNTHESIZING: 'Đang viết báo cáo',
@@ -85,4 +82,28 @@ export function matchLabel(status: string): string {
 
 export function criterionLabel(status: 'PASS' | 'FAIL' | 'UNKNOWN'): string {
   return status === 'PASS' ? 'Đạt' : status === 'FAIL' ? 'Không đạt' : 'Chưa rõ';
+}
+
+export function confidenceLabel(confidence: string | null | undefined): string {
+  switch (confidence) {
+    case 'LOW':
+      return 'Thấp';
+    case 'MEDIUM':
+      return 'Trung bình';
+    case 'HIGH':
+      return 'Cao';
+    default:
+      return 'Chưa có dữ liệu';
+  }
+}
+
+export function verificationIssueLabel(type: string): string {
+  switch (type) {
+    case 'unknown_feature_id':
+      return 'Chỉ số được dẫn không có trong dữ liệu';
+    case 'unmatched_number':
+      return 'Số liệu nêu ra chưa khớp chỉ số được dẫn';
+    default:
+      return 'Cảnh báo kiểm chứng';
+  }
 }

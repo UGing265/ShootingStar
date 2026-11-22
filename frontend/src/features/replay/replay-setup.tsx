@@ -5,13 +5,13 @@ import { Notice, Spinner } from '@/shared/ui/primitives';
 import { formatDateTime, formatInt } from '@/shared/format';
 import type { SnapshotSummary } from '../data/types';
 import { ReplayChart } from './replay-chart';
-import { REQUIRED_HISTORY_HOURS, fromDateTimeLocal, toDateTimeLocal } from './replay-utils';
+import { FORECAST_LOOKBACK_DAYS, fromDateTimeLocal, toDateTimeLocal } from './replay-utils';
 import type { ReplaySession } from './use-replay-session';
 
 export function ReplaySetup({ session, snapshots }: { session: ReplaySession; snapshots: SnapshotSummary[] }) {
   const id = useId();
   const {
-    snapshotId, setSnapshotId, candles, loadingCandles, engine, setEngine, variant, setVariant, dryRun, setDryRun,
+    snapshotId, setSnapshotId, candles, loadingCandles, engine, setEngine,
     buyTimeMs, buyPriceInput, setBuyPriceInput, hoursBefore, hasEnoughHistory, busy, pickCandle, runAnalysis,
     timeRange, timeError, selectTime,
   } = session;
@@ -81,37 +81,14 @@ export function ReplaySetup({ session, snapshots }: { session: ReplaySession; sn
             <strong>Vùng vào lệnh (chiến thuật):</strong> cho ra vùng vào lệnh, mức chốt lời và cắt lỗ trong 30 phút tới.
           </li>
           <li>
-            <strong>Báo cáo Gemini (AI):</strong> cho ra báo cáo nhận định hướng giá 30 phút tới, kèm lập luận và nguồn.
+            <strong>Báo cáo Gemini (AI):</strong> cho ra nhận định hướng giá 6 giờ tới, kèm lập luận, chỉ số viện dẫn và so sánh với hai luật đơn giản.
           </li>
         </ul>
-
-        {gemini && (
-          <div className="row replay-options">
-            <div className="field">
-              <label className="label" htmlFor={`${id}-variant`}>Dữ liệu cung cấp cho Gemini</label>
-              <select id={`${id}-variant`} className="select" data-testid="replay-variant-select" value={variant} onChange={(e) => setVariant(e.target.value as 'A' | 'B')}>
-                <option value="A">Chỉ nến giá</option>
-                <option value="B">Nến giá và bối cảnh thị trường</option>
-              </select>
-            </div>
-            <label className="check">
-              <input type="checkbox" data-testid="replay-dry-run" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
-              <span>
-                Chạy thử bằng dữ liệu giả (không gọi Gemini)
-                <span className="hint" style={{ display: 'block' }}>
-                  {dryRun
-                    ? 'Báo cáo sẽ mang nhãn DỮ LIỆU GIẢ LẬP. Bỏ chọn để dùng Gemini thật (cần khóa API ở máy chủ).'
-                    : 'Sẽ gọi Gemini thật (cần khóa API ở máy chủ).'}
-                </span>
-              </span>
-            </label>
-          </div>
-        )}
       </div>
 
       {gemini && buyTimeMs > 0 && !hasEnoughHistory && (
         <Notice variant="warning" title="Chưa đủ lịch sử.">
-          Báo cáo Gemini cần {REQUIRED_HISTORY_HOURS} giờ nến liên tục trước thời điểm dự báo; hiện có {hoursBefore.toFixed(1)} giờ.
+          Báo cáo Gemini cần ít nhất {FORECAST_LOOKBACK_DAYS} ngày nến liên tục trước thời điểm dự báo; hiện có {hoursBefore.toFixed(1)} giờ.
         </Notice>
       )}
 

@@ -2,14 +2,14 @@
 
 import React from 'react';
 import { Notice } from '@/shared/ui/primitives';
-import { formatUsd } from '@/shared/format';
-import { HORIZON_MINUTES } from './replay-utils';
+import { formatHorizonMinutes, formatUsd } from '@/shared/format';
+import { STRATEGY_HORIZON_MINUTES } from './replay-utils';
 import type { ReplaySession } from './use-replay-session';
 
 export function ReplayVote({ session }: { session: ReplaySession }) {
   const { externalJob, simJob, busy, error, vote, setStep } = session;
   const price = externalJob?.purchase_price_p ?? simJob?.buy_price ?? 0;
-  const horizon = externalJob?.horizon_minutes ?? simJob?.horizon_minutes ?? HORIZON_MINUTES;
+  const horizon = externalJob?.horizon_minutes ?? simJob?.horizon_minutes ?? STRATEGY_HORIZON_MINUTES;
   const disabled = busy !== null;
 
   return (
@@ -17,7 +17,7 @@ export function ReplayVote({ session }: { session: ReplaySession }) {
       <div className="card">
         <h2 className="card-title">Bạn dự đoán thế nào?</h2>
         <p className="card-sub">
-          Sau {horizon} phút, giá có cao hơn hay thấp hơn mức mua {formatUsd(price)}? Lựa chọn sẽ được khóa lại ngay khi bạn bấm.
+          Sau {formatHorizonMinutes(horizon)}, giá có cao hơn hay thấp hơn mức mua {formatUsd(price)}? Lựa chọn sẽ được khóa lại ngay khi bạn bấm.
         </p>
         <div className="grid-2 replay-vote-grid">
           <button type="button" className="replay-vote replay-vote-up" data-testid="replay-vote-up" disabled={disabled} onClick={() => void vote('UP')}>

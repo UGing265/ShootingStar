@@ -275,3 +275,26 @@ class CandidatePlanResponse(BaseModel):
     candidate_state: str
     observations: List[TradeObservationResponse] = []
     created_at: str
+
+
+class AccuracyMetric(BaseModel):
+    n: int
+    correct: int
+    accuracy: Optional[float]
+    wilson_95: Optional[List[float]]
+
+
+class ForecastScoreboardResponse(BaseModel):
+    snapshot_id: str
+    horizon_minutes: int
+    lookback_days: int
+    total: int
+    flat: int
+    unscorable: int
+    missing_baseline_or_direction: int
+    scored: int
+    threshold_n: Dict[str, int]
+    accuracy: Dict[str, AccuracyMetric]
+    confidence: Dict[str, AccuracyMetric]
+    agreement: Dict[str, AccuracyMetric]
+    possible_memorization: Dict[str, AccuracyMetric]

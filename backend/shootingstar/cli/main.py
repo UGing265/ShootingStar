@@ -29,6 +29,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    from shootingstar.cli.forecast_batch_command import register as register_forecast_batch
+    register_forecast_batch(subparsers)
+
 
     # Command: info
     subparsers.add_parser("info", help="Print system information and configuration")
@@ -167,6 +170,10 @@ def main(argv=None) -> int:
     if args.command is None:
         parser.print_help()
         return 0
+    if args.command == "forecast-batch":
+        from shootingstar.cli.forecast_batch_command import run
+        return run(args)
+
 
     if args.command == "info":
         print(f"ShootingStar v{__version__} - Evidence-first 30-minute research platform")

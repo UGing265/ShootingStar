@@ -88,5 +88,20 @@ export function directionLabel(direction: string | null | undefined): string {
 }
 
 export function directionArrow(direction: string | null | undefined): string {
-  return direction === 'UP' ? '▲' : direction === 'DOWN' ? '▼' : direction === 'FLAT' ? '—' : '';
+  return direction === 'UP' ? '▲' : direction === 'DOWN' ? '▼' : direction === 'FLAT' ? '↔' : '';
+}
+
+/** Uppercase direction used by the 6-hour forecast report. */
+export function forecastDirectionLabel(direction: string | null | undefined): string {
+  if (direction === 'UP') return 'TĂNG';
+  if (direction === 'DOWN') return 'GIẢM';
+  if (direction === 'ABSTAIN') return 'Không dự báo';
+  return 'Chưa có dữ liệu';
+}
+
+/** `360` → `6 giờ`, `30` → `30 phút`. */
+export function formatHorizonMinutes(minutes: number | null | undefined): string {
+  if (!minutes || minutes <= 0 || Number.isNaN(minutes)) return 'Chưa có dữ liệu';
+  if (minutes % 60 === 0) return `${minutes / 60} giờ`;
+  return `${minutes} phút`;
 }
