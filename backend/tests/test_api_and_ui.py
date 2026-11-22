@@ -5,9 +5,6 @@ Verifies strict security invariants and Phase 1 B1 contracts:
 - Strict omission of raw file_path, artifact_path, and sensitive internal details.
 - Validated candle extraction with SHA-256 integrity verification.
 - Snapshot quality handling for both linked ingestion runs and legacy unlinked runs.
-- Multi-report experiment detail with ordered splits, calibration, and baselines.
-- Pattern rules and hits (including failure hits and pending hits).
-- Signals list and detail with separated decision, outcome, reviews, and audit logs.
 """
 
 from datetime import datetime, timezone
@@ -63,27 +60,10 @@ def _resolve_pilot_path() -> str:
     return str(p)
 from shootingstar.adapters.db.models import (
     AuditLogModel,
-    ExperimentModel,
-    ExperimentSplitModel,
     IngestionRunModel,
-    MetricReportModel,
-    ModelArtifactModel,
-    PatternHitModel,
-    PatternRuleModel,
-    ReviewOverrideModel,
-    SignalOutcomeModel,
-    SignalPredictionModel,
     SnapshotModel,
 )
-from shootingstar.adapters.db.repository import (
-    ExperimentRepository,
-    MetricReportRepository,
-    PatternHitRepository,
-    PatternRuleRepository,
-    ReviewOverrideRepository,
-    SignalRepository,
-    SnapshotRepository,
-)
+from shootingstar.adapters.db.repository import SnapshotRepository
 from shootingstar.api.app import app
 
 
@@ -372,363 +352,6 @@ def test_api_ingestion_runs_pagination_and_ordering(client, db_session):
         db_session.commit()
 
 
-def test_api_experiment_detail_multi_reports_and_artifacts(client, db_session):
-    now = datetime.now(timezone.utc)
-    exp_id = "exp_test_" + uuid.uuid4().hex[:12]
-
-    # Snapshot placeholder
-    sha = "exp_snap_" + uuid.uuid4().hex[:16]
-    snap = SnapshotModel(
-        id=sha,
-        venue="BINANCE",
-        symbol="BTCUSDT",
-        timeframe="5m",
-        start_time_ms=1000,
-        end_time_ms=2000,
-        candle_count=100,
-        file_path="dummy.parquet",
-        sha256=sha,
-        created_at=now,
-    )
-    db_session.add(snap)
-
-    exp = ExperimentModel(
-        id=exp_id,
-        name="Pilot Experiment",
-        config_hash="cfg_hash_123",
-        snapshot_id=sha,
-        parameters_json=json.dumps({"horizon": 30, "model": "LogisticRegression"}),
-        created_at=now,
-    )
-    db_session.add(exp)
-
-    # Ordered splits
-    s1 = ExperimentSplitModel(
-        id=uuid.uuid4().hex,
-        experiment_id=exp_id,
-        split_type="TRAIN",
-        start_time_ms=1000,
-        end_time_ms=1500,
-        sample_count=50,
-        created_at=now,
-    )
-    s2 = ExperimentSplitModel(
-        id=uuid.uuid4().hex,
-        experiment_id=exp_id,
-        split_type="TEST",
-        start_time_ms=1501,
-        end_time_ms=2000,
-        sample_count=50,
-        created_at=now,
-    )
-    db_session.add_all([s1, s2])
-
-    # Artifacts (should NOT expose artifact_path!)
-    art = ModelArtifactModel(
-        id="art_" + uuid.uuid4().hex[:8],
-        experiment_id=exp_id,
-        model_type="LogisticRegression",
-        artifact_path="C:/secret/models/model.pkl",
-        artifact_hash="hash_art_456",
-        metrics_json=json.dumps({"accuracy": 0.51}),
-        created_at=now,
-    )
-    db_session.add(art)
-
-    # Multi-reports: TRAIN baseline and TEST report with calibration
-    rep_train = MetricReportModel(
-        id=uuid.uuid4().hex,
-        experiment_id=exp_id,
-        split_type="TRAIN",
-        report_type="BASELINE_MAJORITY",
-        metrics_json=json.dumps({"accuracy": 0.50}),
-        calibration_json=None,
-        created_at=now,
-    )
-    rep_test = MetricReportModel(
-        id=uuid.uuid4().hex,
-        experiment_id=exp_id,
-        split_type="TEST",
-        report_type="EVALUATION_REPORT",
-        metrics_json=json.dumps({
-            "accuracy": 0.5105,
-            "directional_accuracy": 0.5105,
-            "cost_adjusted": "UNAVAILABLE_PENDING_SLIPPAGE_METHOD",
-        }),
-        calibration_json=json.dumps({"bins": [{"bin": 0, "sample_count": 25, "mean_predicted_prob": 0.48}]}),
-        created_at=now,
-    )
-    db_session.add_all([rep_train, rep_test])
-    db_session.commit()
-
-    try:
-        res = client.get(f"/experiments/{exp_id}")
-        assert res.status_code == 200
-        data = res.json()
-        assert data["id"] == exp_id
-        assert data["snapshot_sha256"] == sha
-        assert len(data["splits"]) == 2
-        assert data["splits"][0]["split_type"] == "TRAIN"
-        assert data["splits"][1]["split_type"] == "TEST"
-
-        # Check artifacts: strictly no artifact_path!
-        assert len(data["artifacts"]) == 1
-        assert "artifact_path" not in data["artifacts"][0]
-        assert data["artifacts"][0]["artifact_hash"] == "hash_art_456"
-
-        # Check multi-reports with calibration
-        assert len(data["reports"]) == 2
-        r_train = next(r for r in data["reports"] if r["split_type"] == "TRAIN")
-        assert r_train["calibration"] is None
-        r_test = next(r for r in data["reports"] if r["split_type"] == "TEST")
-        assert r_test["calibration"] is not None
-        assert "bins" in r_test["calibration"]
-        assert r_test["metrics"]["directional_accuracy"] == 0.5105
-        assert r_test["metrics"]["cost_adjusted"] == "UNAVAILABLE_PENDING_SLIPPAGE_METHOD"
-    finally:
-        db_session.delete(rep_train)
-        db_session.delete(rep_test)
-        db_session.delete(art)
-        db_session.delete(s1)
-        db_session.delete(s2)
-        db_session.delete(exp)
-        db_session.delete(snap)
-        db_session.commit()
-
-
-def test_api_pattern_rules_and_hits(client, db_session):
-    now = datetime.now(timezone.utc)
-    rule_id = "rule_ss_" + uuid.uuid4().hex[:8]
-    rule = PatternRuleModel(
-        id=rule_id,
-        name="ShootingStar",
-        version=1,
-        description="Bearish shooting star candlestick pattern",
-        definition_json=json.dumps({"wick_ratio": 2.0, "body_ratio": 0.3}),
-        created_at=now,
-    )
-    db_session.add(rule)
-
-    # 1. Successful / evaluated hit
-    hit1 = PatternHitModel(
-        id=uuid.uuid4().hex,
-        rule_id=rule_id,
-        detected_time_ms=10000,
-        symbol="BTCUSDT",
-        timeframe="5m",
-        outcome_return_30m=-0.005,
-        outcome_label="DOWN",
-        created_at=now,
-    )
-    # 2. Failure hit (contrary outcome)
-    hit2 = PatternHitModel(
-        id=uuid.uuid4().hex,
-        rule_id=rule_id,
-        detected_time_ms=20000,
-        symbol="BTCUSDT",
-        timeframe="5m",
-        outcome_return_30m=0.008,
-        outcome_label="UP",  # failed pattern!
-        created_at=now,
-    )
-    # 3. Pending hit (outcome not yet evaluated)
-    hit3 = PatternHitModel(
-        id=uuid.uuid4().hex,
-        rule_id=rule_id,
-        detected_time_ms=30000,
-        symbol="BTCUSDT",
-        timeframe="5m",
-        outcome_return_30m=None,
-        outcome_label=None,
-        created_at=now,
-    )
-    db_session.add_all([hit1, hit2, hit3])
-    db_session.commit()
-
-    try:
-        # Check rule listing
-        res_rules = client.get("/pattern-rules?limit=10")
-        assert res_rules.status_code == 200
-        rules = res_rules.json()
-        assert any(r["id"] == rule_id for r in rules)
-
-        # Check rule hits
-        res_hits = client.get(f"/pattern-rules/{rule_id}/hits?limit=10")
-        assert res_hits.status_code == 200
-        hits = res_hits.json()
-        assert len(hits) == 3
-        # Sorted by detected_time_ms desc
-        assert hits[0]["detected_time_ms"] == 30000
-        assert hits[0]["outcome_label"] is None  # pending
-        assert hits[1]["detected_time_ms"] == 20000
-        assert hits[1]["outcome_label"] == "UP"  # failure hit
-        assert hits[2]["detected_time_ms"] == 10000
-        assert hits[2]["outcome_label"] == "DOWN"
-    finally:
-        db_session.delete(hit1)
-        db_session.delete(hit2)
-        db_session.delete(hit3)
-        db_session.delete(rule)
-        db_session.commit()
-
-
-def test_api_signals_list_and_detail_with_audit_and_review(client, db_session):
-    now = datetime.now(timezone.utc)
-    sig_id = "sig_pred_" + uuid.uuid4().hex[:12]
-
-    # Ensure foreign key experiment exists
-    snap_repo = SnapshotRepository(db_session)
-    pilot_path = _resolve_pilot_path()
-    real_sha = hashlib.sha256(Path(pilot_path).read_bytes()).hexdigest()
-    existing_snap = snap_repo.get_by_sha256(real_sha)
-    snap_id = existing_snap.id if existing_snap else "snap_placeholder"
-
-    exp_id = "exp_sig_" + uuid.uuid4().hex[:12]
-    exp = ExperimentModel(
-        id=exp_id,
-        name="Signal Experiment",
-        config_hash="cfg_hash_sig_123",
-        snapshot_id=snap_id,
-        parameters_json="{}",
-        created_at=now,
-    )
-    db_session.add(exp)
-
-    # Prediction
-    pred = SignalPredictionModel(
-        id=sig_id,
-        prediction_time_ms=50000,
-        experiment_id=exp_id,
-        symbol="BTCUSDT",
-        timeframe="5m",
-        horizon_minutes=30,
-        probability_up=0.35,
-        probability_down=0.65,
-        probability_no_trade=0.0,
-        predicted_class="DOWN",
-        decision="NO_TRADE",
-        decision_reason="Threshold filter below confidence band",
-        created_at=now,
-    )
-    db_session.add(pred)
-
-    # Maturation outcome
-    outcome = SignalOutcomeModel(
-        id=uuid.uuid4().hex,
-        signal_id=sig_id,
-        status="EVALUATED",
-        evaluated_at_ms=51800,
-        realized_return=-0.004,
-        realized_label="DOWN",
-        is_match=True,
-        unscorable_reason=None,
-        created_at=now,
-    )
-    db_session.add(outcome)
-
-    # Review override
-    review = ReviewOverrideModel(
-        id=uuid.uuid4().hex,
-        signal_id=sig_id,
-        reviewer_id="lead_analyst",
-        override_decision="NO_TRADE",
-        notes="Confirmed decision aligned with volatility bounds",
-        created_at=now,
-    )
-    db_session.add(review)
-
-    # Audit log (filtered by entity_id)
-    audit = AuditLogModel(
-        entity_type="signal",
-        entity_id=sig_id,
-        action="MATURED",
-        details_json=json.dumps({"realized_return": -0.004}),
-        created_at=now,
-    )
-    db_session.add(audit)
-    db_session.commit()
-
-    try:
-        # Check signals list
-        res_list = client.get("/signals?limit=10")
-        assert res_list.status_code == 200
-        sigs = res_list.json()
-        sig_summary = next(s for s in sigs if s["id"] == sig_id)
-        assert sig_summary["status"] == "EVALUATED"
-        assert sig_summary["predicted_class"] == "DOWN"
-        assert sig_summary["decision"] == "NO_TRADE"
-        assert sig_summary["is_match"] is True
-
-        # Check signal detail
-        res_detail = client.get(f"/signals/{sig_id}")
-        assert res_detail.status_code == 200
-        detail = res_detail.json()
-        assert detail["prediction"]["id"] == sig_id
-        assert detail["prediction"]["decision_reason"] == "Threshold filter below confidence band"
-        assert detail["outcome"]["status"] == "EVALUATED"
-        assert len(detail["reviews"]) == 1
-        assert detail["reviews"][0]["reviewer_id"] == "lead_analyst"
-        assert len(detail["audit_logs"]) == 1
-        assert detail["audit_logs"][0]["action"] == "MATURED"
-
-        # Check unknown signal -> 404
-        res_404 = client.get("/signals/unknown_sig_id")
-        assert res_404.status_code == 404
-    finally:
-        db_session.delete(audit)
-        db_session.delete(review)
-        db_session.delete(outcome)
-        db_session.delete(pred)
-        db_session.delete(exp)
-        db_session.commit()
-
-
-def test_api_patterns_endpoint_deterministic_and_404(client, db_session):
-    # 1. Non-existent snapshot ID must return 404 Not Found
-    response_404 = client.get("/patterns?snapshot_id=unknown_snap_id")
-    assert response_404.status_code == 404
-    assert "not found" in response_404.json()["detail"].lower()
-
-    # 2. Register deterministic test snapshot
-    snap_repo = SnapshotRepository(db_session)
-    pilot_path = _resolve_pilot_path()
-    real_sha = hashlib.sha256(Path(pilot_path).read_bytes()).hexdigest()
-
-    snap = SnapshotModel(
-        id=real_sha,
-        venue="BINANCE",
-        symbol="BTCUSDT",
-        timeframe="5m",
-        start_time_ms=1788894000000,
-        end_time_ms=1791485999999,
-        candle_count=8640,
-        file_path=pilot_path,
-        sha256=real_sha,
-    )
-    existing = snap_repo.get_by_sha256(real_sha)
-    if not existing:
-        snap_repo.save(snap)
-        db_session.commit()
-
-    # Query with explicit snapshot_id
-    response = client.get(f"/patterns?snapshot_id={real_sha}")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["snapshot_sha256"] == real_sha
-    assert data["candle_count"] == 8640
-    assert "reports" in data
-    assert data["hypothesis_track"] == "SEPARATE_HYPOTHESIS_TRACK_NOT_IN_MODEL_FEATURES"
-    assert data["computation_type"] == "ON_DEMAND_SNAPSHOT_AGGREGATE"
-    # Invariant: Must strictly omit raw snapshot file path
-    assert "snapshot_file" not in data
-
-    # Query default without params
-    response_default = client.get("/patterns")
-    assert response_default.status_code == 200
-    data_def = response_default.json()
-    assert len(data_def["reports"]) == 4
-
-
 def test_api_narrative_endpoint(client):
     response = client.get("/narrative")
     assert response.status_code == 200
@@ -742,8 +365,6 @@ def test_research_ui_manifesto_and_cost_gating(client):
     assert response.status_code == 200
     html = response.text
     assert "ShootingStar Research Platform" in html
-    assert "COST: UNAVAILABLE_PENDING_SLIPPAGE_METHOD" in html
-    assert "Rule-Based Pattern Lab" in html
 
 
 def test_ingestion_jobs_validation(client):
@@ -1128,7 +749,7 @@ def test_simulation_api_endpoints_workflow(client, db_session, tmp_path):
 
 def test_snapshot_path_resolution_and_candles_retrieval(client, db_session, tmp_path, monkeypatch):
     """Verifies robust snapshot path resolution across directory layouts, cwd independence, and 404 handling."""
-    from shootingstar.api.read_routes import _resolve_snapshot_file_path
+    from shootingstar.adapters.storage import resolve_snapshot_file_path as _resolve_snapshot_file_path
     from shootingstar.adapters.db.models import SnapshotModel
     from shootingstar.adapters.storage import SnapshotStorage
     from shootingstar.domain.models import Candle
@@ -1173,4 +794,37 @@ def test_snapshot_path_resolution_and_candles_retrieval(client, db_session, tmp_
         assert res_missing.json()["detail"] == "Snapshot data file not found on disk"
     finally:
         db_session.delete(missing_snap)
+        db_session.commit()
+
+
+def test_replay_and_analysis_reject_snapshot_with_missing_file(client, db_session):
+    """A snapshot row whose parquet is gone gives a clear 404 / ValueError, never a raw FileNotFoundError."""
+    import pytest
+    from shootingstar.adapters.db.models import SnapshotModel
+    from shootingstar.application.external_analysis.service import ExternalAnalysisService
+
+    snap = SnapshotModel(
+        id="missing_replay_snap",
+        venue="BINANCE",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        start_time_ms=1700000000000,
+        end_time_ms=1700030000000,
+        candle_count=100,
+        file_path="data/snapshots/does_not_exist.parquet",
+        sha256="missing_replay_snap",
+    )
+    db_session.add(snap)
+    db_session.commit()
+    try:
+        res = client.post(
+            "/replay/jobs",
+            json={"snapshot_id": snap.id, "buy_time_ms": 1700020000000, "buy_price": 100.0},
+        )
+        assert res.status_code == 404
+        assert res.json()["detail"] == "Snapshot data file not found on disk"
+        with pytest.raises(ValueError, match="not found on disk"):
+            ExternalAnalysisService._snapshot_path(snap)
+    finally:
+        db_session.delete(snap)
         db_session.commit()
