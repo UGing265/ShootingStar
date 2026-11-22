@@ -1,6 +1,6 @@
 # ShootingStar — Backend Service
 
-The backend provides market data ingestion, immutable Parquet snapshot management, walk-forward ML experiment execution, pattern recognition, and read-only REST APIs for the Next.js frontend.
+The backend provides market data ingestion, immutable Parquet snapshot management, and read-only REST APIs for the Next.js frontend.
 
 ## 1. Prerequisites
 
@@ -81,3 +81,10 @@ Options:
 - `--end`: End time in ISO 8601 string or Unix millisecond timestamp (required).
 
 Fetched candles are deduplicated, validated, registered in the database, and persisted into an immutable Parquet snapshot under `data/snapshots/`.
+
+
+
+
+
+
+.venv\Scripts\python.exe -m uvicorn shootingstar.api.app:app --host 127.0.0.1 --port 8000

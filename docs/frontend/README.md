@@ -55,12 +55,8 @@ Các trang làm việc hiển thị kết quả đã lưu từ backend khi ngư�
 | `/` | Giới thiệu | Mục tiêu dự án và giới hạn hiện tại. |
 | `/dashboard` | Tổng quan | Trạng thái kết nối và những bản ghi gần đây. |
 | `/data` | Lịch sử giá | Các bộ nến BTCUSDT đã lưu, khoảng thời gian và tình trạng kiểm tra chất lượng; không phải bảng giá trực tiếp. |
-| `/research` | Kết quả thử nghiệm | Các lần thử phương pháp dự đoán trên dữ liệu lịch sử. |
-| `/research/[id]` | Chi tiết thử nghiệm | Kết quả từng giai đoạn, đối chiếu và kiểm tra xác suất. |
-| `/patterns` | Mẫu hình giá | Các quy tắc nhận diện mẫu nến đã đăng ký. |
-| `/patterns/[id]` | Chi tiết mẫu hình | Những lần mẫu hình xuất hiện trong dữ liệu lịch sử và diễn biến sau đó. |
-| `/signals` | Dự đoán | Những dự đoán đã ghi nhận cùng trạng thái chờ hoặc đã có kết quả. |
-| `/signals/[id]` | Chi tiết dự đoán | Thông tin và kết quả của một dự đoán. |
+| `/replay` | Mô phỏng | Quay lại một thời điểm trong quá khứ, xem phân tích chỉ từ nến đã đóng, dự đoán rồi đối chiếu với diễn biến thật. |
+| `/report` | Báo cáo | Danh sách báo cáo Gemini và chi tiết một báo cáo: nhận định hướng giá, lập luận, nguồn tài liệu và kết quả đối chiếu. |
 | `/about` | Phương pháp | Cách hệ thống đánh giá và những giới hạn cần biết. |
 
 ## 5. Cấu trúc Route Handlers & Components Nổi bật
@@ -74,3 +70,25 @@ Các trang làm việc hiển thị kết quả đã lưu từ backend khi ngư�
 - Nằm tại `src/features/data/candlestick-chart.tsx`, dựng biểu đồ nến tương tác thuần Canvas (zero heavy charting dependencies).
 - Hỗ trợ pan kéo thả chuột, phóng to/thu nhỏ (zoom), tooltip hiển thị chỉ số OHLCV khi hover, bảng chi tiết nến và công cụ nhảy nhanh theo khoảng thời gian (`start_ms` / `end_ms`).
 - Tích hợp trực tiếp trên trang `/data` để hiển thị trực quan các bộ nến Parquet đã đăng ký.
+
+## 6. Playwright E2E
+
+From `frontend/`, install Chromium and set `E2E_SNAPSHOT_ID` to an existing snapshot ID:
+
+```powershell
+npx playwright install chromium
+$env:E2E_SNAPSHOT_ID = "<snapshot-id>"
+npm run e2e
+```
+
+Tests start the backend using `backend/.venv/Scripts/python.exe` on port 8100 and the frontend on port 3100. Both ports must be free. The backend uses the main database configured in the repository `.env`; tests may create jobs in that database. No test database or migration is created.
+
+During an E2E run, Next.js temporarily points `next-env.d.ts` at `.next-e2e`. Do not run `tsc` or rely on frontend editor diagnostics until the run finishes.
+
+If the shell has `SHOOTINGSTAR_ADMIN_KEY` set, it must match the repository `.env`. Remove the shell variable if preflight reports a mismatch. Preflight never prints its value.
+
+The default run excludes `@real-gemini` tests. To run only those tests manually, with real Gemini quota:
+
+```powershell
+npm run e2e:gemini
+```
