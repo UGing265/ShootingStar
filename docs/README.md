@@ -4,8 +4,10 @@ ShootingStar is an evidence-first, local-first quantitative research platform fo
 
 ## Documentation Index
 
-- [Backend Guide](./backend/README.md) — FastAPI service, Python venv, PostgreSQL, Alembic migrations, and test suite.
-- [Frontend Guide](./frontend/README.md) — Next.js 14 App Router, TypeScript, component architecture, and page routes.
+- [Các hướng đi cho dự đoán BTCUSDT](./forecast-strategy-options.md) — 7 hướng A đến G, số liệu baseline thật, tiêu chí quyết định. Đang giữ hướng A (Gemini dự đoán 6h).
+- [Bản đồ kiến trúc](./systemmd/README.md) — kiến trúc backend và frontend, luồng, danh mục API, bảng DB, cấu trúc thư mục.
+- [Chạy Backend](./run-backend.md) — Python venv, DB, Alembic, chạy service, CLI, test.
+- [Chạy Frontend](./run-frontend.md) — Node.js, biến môi trường, chạy dev/build, E2E Playwright.
 - [Local Development Runbook](./local-run.md) — Two-terminal local launch instructions, verification steps, and troubleshooting.
 - [Design Tokens & Guidelines](./DESIGN.md) — Apple-inspired UI design system, color palette, typography, and layout rules.
 - [Spot Trading Fees Reference](./binance-spot-fees.md) — Binance maker/taker fee structures and research considerations.
