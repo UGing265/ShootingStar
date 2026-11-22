@@ -1,4 +1,4 @@
-"""FastAPI routes for Causal Historical Replay sessions."""
+"""FastAPI routes for replay simulation jobs."""
 
 import logging
 from pathlib import Path
@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from shootingstar.adapters.db.repository import SnapshotRepository
 from shootingstar.adapters.db.session import get_db_session
+from shootingstar.adapters.storage import resolve_snapshot_file_path
 from shootingstar.api.schemas import (
     CandleDTO,
     CreateSimulationJobRequest,
@@ -94,7 +95,9 @@ def create_simulation_job(req: CreateSimulationJobRequest):
         snap = repo.get_by_id(req.snapshot_id)
         if not snap:
             raise HTTPException(status_code=404, detail=f"Snapshot '{req.snapshot_id}' not found")
-        snap_path = Path(snap.file_path)
+        snap_path = resolve_snapshot_file_path(snap.file_path)
+        if snap_path is None:
+            raise HTTPException(status_code=404, detail="Snapshot data file not found on disk")
 
     try:
         job = simulation_manager.create_job(
@@ -103,7 +106,6 @@ def create_simulation_job(req: CreateSimulationJobRequest):
             buy_time_ms=req.buy_time_ms,
             buy_price=req.buy_price,
             horizon_minutes=req.horizon_minutes,
-            model_artifact_hash=req.model_artifact_hash,
         )
         return _to_job_response(job)
     except DomainError as err:
@@ -143,7 +145,9 @@ def reveal_simulation_outcome(job_id: str):
         snap = repo.get_by_id(job.snapshot_id)
         if not snap:
             raise HTTPException(status_code=404, detail=f"Snapshot '{job.snapshot_id}' not found")
-        snap_path = Path(snap.file_path)
+        snap_path = resolve_snapshot_file_path(snap.file_path)
+        if snap_path is None:
+            raise HTTPException(status_code=404, detail="Snapshot data file not found on disk")
 
     try:
         updated_job = simulation_manager.reveal_outcome(job_id, snap_path)

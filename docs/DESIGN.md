@@ -560,3 +560,15 @@ The structural breakpoints that matter for agents: 1440px (content lock), 1068px
 - Dark-mode counterparts for store and accessories utility cards were not surfaced on the analyzed pages; the system documented is the daytime/light-dominant variant Apple ships by default.
 - Atmospheric photography (environment page mountain vista) is a content asset, not a design token; the documented `{component.environment-quote-card}` describes the structural surface only.
 - The exact backdrop-filter blur radius on `{component.sub-nav-frosted}` and `{component.floating-sticky-bar}` is platform-dependent; production CSS uses `saturate(180%) blur(20px)` as a typical baseline but the value isn't formalized as a token.
+
+## App implementation notes (frontend/)
+
+The app follows this system with a compact, work-oriented density. Tokens live as CSS variables in `frontend/src/app/globals.css`; feature styles sit beside their components (`features/{data,replay,report}/*.css`).
+
+- Navigation: 232px white left sidebar with hairline border (Tổng quan, Lịch sử giá, Mô phỏng, Báo cáo; then Giới thiệu and Phương pháp below a divider); active item is Action Blue on a soft blue fill. Under 834px it becomes a Menu button + slide-in drawer (focus-trapped, Esc closes).
+- Page frame: parchment canvas, 1200px max width, white 18px-radius cards with 1px hairline, no shadows. App type scale: 28px page title, 17px section/card title, 15px body, 12-13px meta.
+- About page: scrollytelling with a sticky dark stage (#121214) and narrative cards that switch scenes on scroll; the only dark surface in the app.
+- Status colors (green/red/amber tints) appear only for market direction, verdicts and notices; everything interactive stays Action Blue.
+- Controls: pill primary button, `.btn-secondary` outline, `.btn-quiet` for neutral actions, `.seg` segmented control, `.notice` banners, `.empty-state` for "Chưa có dữ liệu".
+- Charts (canvas): white plot area, hairline grid, up #1d8348 / down #c0392b candles, blue markers; wheel zoom, drag pan, click vs drag by movement threshold; all times UTC+7.
+- Copy rule: short Vietnamese, no internal jargon (hash, UNSCORABLE, lookahead); missing values read "Chưa có dữ liệu".

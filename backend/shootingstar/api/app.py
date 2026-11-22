@@ -14,7 +14,6 @@ from shootingstar.api.read_routes import router as read_router
 from shootingstar.api.ingestion_routes import router as ingestion_router
 from shootingstar.api.replay_routes import router as replay_router
 from shootingstar.api.external_routes import router as external_router
-from shootingstar.api.lesson_routes import router as lesson_router
 from shootingstar.api.trade_plan_routes import router as trade_plan_router
 from shootingstar.application.external_analysis.contracts import AnalysisStatus
 
@@ -49,7 +48,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ShootingStar Research Platform",
-    description="Local-first, evidence-first research platform for BTCUSDT 30-minute predictive modeling.",
+    description="Local-first, evidence-first research platform for BTCUSDT 30-minute replay analysis.",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -58,7 +57,6 @@ app.include_router(read_router)
 app.include_router(ingestion_router)
 app.include_router(replay_router)
 app.include_router(external_router)
-app.include_router(lesson_router)
 app.include_router(trade_plan_router)
 @app.get("/", response_class=HTMLResponse)
 def get_research_ui():
@@ -211,123 +209,16 @@ def get_research_ui():
         <header>
             <div>
                 <h1>ShootingStar Research Platform</h1>
-                <div class="tagline">Local-first, evidence-first research on BTCUSDT 30-minute predictive modeling</div>
-            </div>
-            <div>
-                <span class="badge badge-success">● System Healthy</span>
+                <div class="tagline">Local-first, evidence-first research on BTCUSDT 30-minute replay analysis</div>
             </div>
         </header>
 
         <div class="manifesto-box">
-            <strong>Evidence-First Invariant:</strong> Cost-adjusted 3-class performance and action net expectancy remain strictly <strong>GATED</strong> until an empirical slippage model is approved. No fake win rates, no zero-slippage assumptions.
-        </div>
-
-        <div class="card">
-            <div class="card-title">
-                <span>Model Out-Of-Sample Benchmark (Walk-Forward Horizon)</span>
-                <span class="badge badge-warning">COST: UNAVAILABLE_PENDING_SLIPPAGE_METHOD</span>
-            </div>
-            <div class="grid-2">
-                <div class="stat-box">
-                    <div class="stat-label">Model Directional Accuracy</div>
-                    <div class="stat-value">Chưa kiểm chứng</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">Majority Baseline Accuracy</div>
-                    <div class="stat-value">Chưa kiểm chứng</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">Brier Score Calibration</div>
-                    <div class="stat-value">GATED</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">Probability Calibration</div>
-                    <div class="stat-value">Platt (1D Sigmoid)</div>
-                </div>
-            </div>
-            <div style="font-size: 12px; color: var(--text-muted); margin-top: 12px;">
-                * Kết quả kiểm định out-of-sample chính thức chưa được phê duyệt. Vui lòng tham khảo báo cáo thực nghiệm chi tiết qua API <code>/experiments</code>.
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="card-title">
-                <span>Rule-Based Pattern Lab (Hypothesis Testing)</span>
-                <span class="badge" style="background: #21262d; color: #8b949e;">Declarative Rules</span>
-            </div>
-            <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
-                Các mẫu hình được theo dõi tự động qua quy tắc hình học nến rõ ràng. Chưa có kết quả kiểm chứng độc lập nào chứng minh ưu thế vượt trội (edge) có thể khai thác.
-            </p>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Pattern Name</th>
-                        <th>Target Direction</th>
-                        <th>Trạng Thái Kiểm Chứng</th>
-                        <th>P&L / Expectancy</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td><strong>Shooting Star</strong></td>
-                        <td>DOWN</td>
-                        <td>Chưa có kết quả kiểm chứng</td>
-                        <td><span class="badge badge-warning">GATED</span></td>
-                    </tr>
-                    <tr>
-                        <td><strong>Hammer</strong></td>
-                        <td>UP</td>
-                        <td>Chưa có kết quả kiểm chứng</td>
-                        <td><span class="badge badge-warning">GATED</span></td>
-                    </tr>
-                    <tr>
-                        <td><strong>Bearish Engulfing</strong></td>
-                        <td>DOWN</td>
-                        <td>Chưa có kết quả kiểm chứng</td>
-                        <td><span class="badge badge-warning">GATED</span></td>
-                    </tr>
-                    <tr>
-                        <td><strong>Bullish Engulfing</strong></td>
-                        <td>UP</td>
-                        <td>Chưa có kết quả kiểm chứng</td>
-                        <td><span class="badge badge-warning">GATED</span></td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-
-        <div class="card">
-            <div class="card-title">
-                <span>Data Integrity & Immutable Snapshots</span>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>File / Snapshot</th>
-                        <th>Timeframe</th>
-                        <th>Candles</th>
-                        <th>SHA-256 Hash</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>BINANCE_BTCUSDT_5m_pilot</td>
-                        <td>5m</td>
-                        <td>8,640</td>
-                        <td><span class="code-hash">97f6323ad230cb233157b85e05030fec...</span></td>
-                    </tr>
-                    <tr>
-                        <td>BINANCE_BTCUSDT_1m_pilot</td>
-                        <td>1m</td>
-                        <td>43,200</td>
-                        <td><span class="code-hash">f06ca2a5089e70198031e428407fc366...</span></td>
-                    </tr>
-                </tbody>
-            </table>
+            <strong>Evidence-First Invariant:</strong> Pattern results and expectancy remain strictly <strong>GATED</strong> until independently validated. No fake win rates, no zero-slippage assumptions.
         </div>
 
         <div style="text-align: center; color: var(--text-muted); font-size: 12px; margin-top: 32px;">
-            ShootingStar Research Platform &bull; REST API available at <a href="/docs" style="color: var(--accent);">/docs</a> &bull; Append-Only Signals at <a href="/signals" style="color: var(--accent);">/signals</a>
+            ShootingStar Research Platform &bull; REST API available at <a href="/docs" style="color: var(--accent);">/docs</a>
         </div>
     </div>
 </body>

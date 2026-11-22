@@ -1,0 +1,4 @@
+test-results/
+playwright-report/
+e2e/.created-jobs.json
+.next-e2e/

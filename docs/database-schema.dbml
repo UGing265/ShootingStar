@@ -1,0 +1,212 @@
+// ShootingStar database schema — nguồn: backend/shootingstar/adapters/db/models.py
+// Import vào https://dbdiagram.io (Import > DBML). Alembic head: 7b8c9d0e1f2a.
+// Ghi chú "Trạng thái" phản ánh code ở thời điểm viết, KHÔNG phải quyết định drop bảng.
+
+Project shootingstar {
+  database_type: 'PostgreSQL'
+  Note: 'Thời gian *_ms là epoch millisecond UTC; created_at/updated_at là timestamptz UTC.'
+}
+
+// ===== Nhóm 1: Dữ liệu giá =====
+
+Table ingestion_runs {
+  id varchar(36) [pk]
+  venue varchar(32) [not null, default: 'BINANCE']
+  symbol varchar(32) [not null]
+  timeframe varchar(16) [not null]
+  start_time_ms bigint [not null]
+  end_time_ms bigint [not null]
+  valid_candles_count int [not null]
+  missing_intervals_count int [not null, default: 0]
+  duplicate_candles_count int [not null, default: 0]
+  coverage_ratio float [not null, default: 1.0]
+  is_pristine boolean [not null, default: true]
+  raw_files_count int [not null, default: 0]
+  created_at timestamptz [not null]
+  Note: 'Một lần tải từ Binance. Trạng thái: đang dùng (ingestion).'
+}
+
+Table snapshots {
+  id varchar(64) [pk, note: 'sha256 của file Parquet']
+  ingestion_run_id varchar(36) [ref: > ingestion_runs.id]
+  venue varchar(32) [not null, default: 'BINANCE']
+  symbol varchar(32) [not null]
+  timeframe varchar(16) [not null]
+  start_time_ms bigint [not null]
+  end_time_ms bigint [not null]
+  candle_count int [not null]
+  file_path varchar(512) [not null, note: 'Không trả ra API công khai']
+  sha256 varchar(64) [not null, unique]
+  created_at timestamptz [not null]
+  Note: 'Danh mục snapshot Parquet bất biến. Trạng thái: đang dùng (replay, biểu đồ).'
+}
+
+Table canonical_candles {
+  id bigint [pk, increment]
+  venue varchar(32) [not null, default: 'BINANCE']
+  symbol varchar(32) [not null]
+  timeframe varchar(16) [not null]
+  open_time_ms bigint [not null]
+  close_time_ms bigint [not null]
+  open float [not null]
+  high float [not null]
+  low float [not null]
+  close float [not null]
+  volume float [not null]
+  quote_volume float [not null]
+  trades_count int [not null]
+  taker_buy_base_volume float [not null]
+  taker_buy_quote_volume float [not null]
+  observed_ingested_at_ms bigint
+  is_backfill boolean [not null, default: false]
+  indexes {
+    (venue, symbol, timeframe, open_time_ms) [unique, name: 'uq_canonical_candle']
+    open_time_ms [name: 'ix_canonical_candle_open_time']
+  }
+  Note: 'Chưa xác minh: ingestion hiện ghi Parquet; chưa kiểm tra có ghi bảng này hay không.'
+}
+
+Table rejected_records {
+  id bigint [pk, increment]
+  venue varchar(32) [not null, default: 'BINANCE']
+  symbol varchar(32) [not null]
+  timeframe varchar(16) [not null]
+  timestamp_ms bigint
+  rejection_reason varchar(256) [not null]
+  raw_payload_preview varchar(512) [not null]
+  ingested_at_ms bigint [not null]
+  created_at timestamptz [not null]
+  Note: 'Bản ghi bị loại khi tải. Chưa xác minh mức độ dùng.'
+}
+
+Table audit_logs {
+  id bigint [pk, increment]
+  entity_type varchar(64) [not null]
+  entity_id varchar(64) [not null]
+  action varchar(64) [not null]
+  details_json text [not null]
+  created_at timestamptz [not null]
+  indexes {
+    entity_type
+    entity_id
+  }
+  Note: 'Nhật ký kiểm toán chung. Chưa xác minh mức độ dùng.'
+}
+
+// ===== Nhóm 2: Báo cáo Gemini (external-analysis) =====
+
+Table external_analysis_jobs {
+  id varchar(64) [pk]
+  snapshot_id varchar(64) [not null, note: 'Tham chiếu mềm tới snapshots.id, không có FK']
+  snapshot_hash varchar(64) [not null]
+  symbol varchar(32) [not null, default: 'BTCUSDT']
+  timeframe varchar(16) [not null]
+  prediction_time_t_ms bigint [not null]
+  purchase_price_p float [not null]
+  horizon_minutes int [not null, default: 30]
+  mode varchar(32) [not null, default: 'RETROSPECTIVE']
+  context_variant varchar(16) [not null, default: 'A']
+  prompt_version varchar(32) [not null, default: 'v1']
+  model_id varchar(64) [not null, default: 'gemini-2.5-flash']
+  key_index int
+  status varchar(32) [not null, default: 'PREPARING']
+  direction varchar(16)
+  rationale text
+  evidence_times_json text
+  raw_output_json text
+  evidence_envelope_json text
+  prompt_tokens int
+  completion_tokens int
+  estimated_cost_usd float
+  user_vote varchar(16)
+  target_price float
+  outcome varchar(32)
+  is_revealed boolean [not null, default: false]
+  outcome_evaluated_at_ms bigint
+  error_message text
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  indexes {
+    snapshot_id
+    prediction_time_t_ms
+    status
+  }
+  Note: 'Một báo cáo Gemini + vote + kết quả. Trạng thái: đang dùng (trang Báo cáo, Mô phỏng).'
+}
+
+// ===== Nhóm 3: Trade plan / watcher =====
+// Trạng thái: backend giữ theo plan 261109; frontend chưa có trang dùng.
+
+Table trade_watches {
+  id varchar(64) [pk]
+  operator_id varchar(64) [not null]
+  symbol varchar(32) [not null]
+  status varchar(32) [not null, default: 'WATCHING']
+  position_state varchar(32) [not null, default: 'FLAT']
+  strategy_version varchar(64) [not null]
+  risk_config_json text [not null]
+  symbol_filters_json text [not null]
+  active_candidate_id varchar(64) [note: 'Tham chiếu mềm tới candidate_plans.id']
+  execution_mode varchar(32)
+  opened_at_ms bigint
+  deadline_ms bigint
+  closed_at_ms bigint
+  lease_owner varchar(128)
+  lease_expires_at_ms bigint
+  lease_token varchar(64)
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+  indexes {
+    operator_id
+    symbol
+  }
+}
+
+Table candidate_plans {
+  id varchar(64) [pk]
+  watch_id varchar(64) [ref: > trade_watches.id]
+  strategy_version varchar(64) [not null]
+  rule_config_hash varchar(64) [not null]
+  decision_time_ms bigint [not null]
+  available_cutoff_ms bigint [not null]
+  entry_zone_json text [not null]
+  confirmation_json text [not null]
+  invalidation_json text [not null]
+  stop_price numeric(20,8) [not null]
+  target_price numeric(20,8) [not null]
+  wait_expires_at_ms bigint [not null]
+  horizon_ms bigint [not null, default: 1800000]
+  probability_json text
+  reasons_json text
+  candidate_state varchar(32) [not null, default: 'WAITING']
+  created_at timestamptz [not null]
+  indexes {
+    watch_id
+  }
+}
+
+Table trade_observations {
+  id varchar(64) [pk]
+  idempotency_key varchar(128) [not null, unique]
+  candidate_id varchar(64) [not null, note: 'Tham chiếu mềm tới candidate_plans.id, không có FK']
+  watch_id varchar(64) [note: 'Tham chiếu mềm tới trade_watches.id, không có FK']
+  observation_type varchar(16) [not null, note: 'ENTRY hoặc EXIT']
+  mode varchar(32) [not null, note: 'PAPER hoặc MANUAL_REPORTED']
+  price numeric(20,8) [not null]
+  quantity numeric(20,8) [not null]
+  remaining_quantity numeric(20,8)
+  fees_paid numeric(20,8) [not null]
+  actual_time_ms bigint [not null]
+  receipt_time_ms bigint [not null]
+  is_off_plan boolean [not null, default: false]
+  is_risk_breach boolean [not null, default: false]
+  reconciled_sl_breach boolean [not null, default: false]
+  exit_reason varchar(32)
+  realized_pnl_usdt numeric(20,8)
+  notes text
+  created_at timestamptz [not null]
+  indexes {
+    candidate_id
+    watch_id
+  }
+}

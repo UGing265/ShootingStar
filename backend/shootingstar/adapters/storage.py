@@ -25,6 +25,24 @@ class StoragePaths:
         cls.SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
         cls.LITERATURE_DIR.mkdir(parents=True, exist_ok=True)
 
+def resolve_snapshot_file_path(file_path_str: str) -> Optional[Path]:
+    """Resolves snapshot file path robustly against cwd, repo root, and backend dir."""
+    if not file_path_str:
+        return None
+    p = Path(file_path_str)
+    # Absolute paths must be resolved strictly; never fall through if missing
+    if p.is_absolute():
+        return p if p.exists() else None
+    if p.exists():
+        return p.resolve()
+    repo_root = Path(__file__).resolve().parents[3]
+    for base in (repo_root, repo_root / "backend"):
+        candidate = base / p
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
 
 class RawArchiveStorage:
     """Stores exact raw external JSON payloads with checksums and metadata."""

@@ -2,6 +2,7 @@ import React from 'react';
 import Link from 'next/link';
 
 import { HeroSequence } from '@/features/landing/hero-sequence';
+import './landing.css';
 
 export default function LandingPage() {
   return (
@@ -50,10 +51,7 @@ export default function LandingPage() {
             Một nơi để đặt dự đoán cạnh bằng chứng.
           </h2>
           <p className="landing-section-body landing-section-body-light">
-            ShootingStar xây dựng cơ sở hạ tầng thực nghiệm độc lập: dự đoán xác suất
-            hướng giá trong 30 phút kế tiếp dựa trên nến đã đóng tại thời điểm $t$.
-            Dự đoán được ghi nhận bất biến vào sổ dữ liệu tại mốc phát sinh và đối
-            chiếu sòng phẳng với kết quả thị trường. Không làm tròn, không vẽ lại lịch sử.
+            ShootingStar xây dựng cơ sở hạ tầng thực nghiệm độc lập: quay lại một mốc $t$ trong lịch sử, dự đoán hướng giá 30 phút kế tiếp chỉ từ nến đã đóng, rồi đối chiếu sòng phẳng với kết quả thị trường. Không làm tròn, không vẽ lại lịch sử.
           </p>
           <div className="landing-section-cta">
             <Link href="/dashboard" className="landing-cta-secondary">
@@ -69,15 +67,14 @@ export default function LandingPage() {
           <div className="landing-section-eyebrow">Định hướng phát triển</div>
           <h2 className="landing-section-title">Kỹ thuật · Tin tức · Con người</h2>
           <p className="landing-section-body" style={{ marginBottom: 40 }}>
-            Ba trụ cột định hình tương lai của nền tảng. Gần 90% vẫn là mục tiêu chưa đạt.
+            Ba trụ cột định hình tương lai của nền tảng. Chưa có kết quả nào được kiểm chứng.
           </p>
           <div className="landing-pillars">
             <div className="landing-pillar">
               <div className="landing-pillar-label">Kỹ thuật</div>
               <div className="landing-pillar-status landing-pillar-status-active">Đang thử nghiệm</div>
               <p className="landing-pillar-desc">
-                Mô hình định lượng xác suất và Pattern Lab mẫu hình nến, tuân thủ chặt chẽ
-                loại trừ rò rỉ dữ liệu tương lai.
+                Chiến thuật vùng vào lệnh và báo cáo phân tích chỉ dựa trên nến đã đóng, loại trừ rò rỉ dữ liệu tương lai.
               </p>
             </div>
             <div className="landing-pillar">
@@ -110,21 +107,19 @@ export default function LandingPage() {
               <div className="landing-principle-title">Chống rò rỉ dữ liệu</div>
               <p className="landing-principle-desc">
                 Mọi đặc trưng tại thời điểm <code>t</code> chỉ dùng nến đã đóng
-                với độ trễ ghi nhận tối thiểu 1.000ms. Không nhìn trước tương lai.
+                với độ trễ ghi nhận cho từng nến. Không nhìn trước tương lai.
               </p>
             </div>
             <div className="landing-principle">
               <div className="landing-principle-title">Không giả lập phí bằng 0</div>
               <p className="landing-principle-desc">
-                Chi phí giao dịch Binance Spot 0,20% roundtrip và mô hình trượt giá (slippage)
-                bắt buộc phải được tính vào mọi bài toán.
+                Phí giao dịch và trượt giá (slippage) được tính vào mọi kết quả vào lệnh thử.
               </p>
             </div>
             <div className="landing-principle">
-              <div className="landing-principle-title">Chỉ số P&amp;L: GATED</div>
+              <div className="landing-principle-title">Chưa có kết luận hiệu quả</div>
               <p className="landing-principle-desc">
-                Chỉ số P&L ròng và chính sách hành động tự động theo chi phí hiện chưa được
-                mở khóa cho đến khi hoàn thành thẩm định độc lập. Không có số liệu bịa đặt.
+                Chưa có kết quả kiểm chứng độc lập nào được duyệt. Không có số liệu bịa đặt, không cam kết lợi nhuận.
               </p>
             </div>
           </div>
@@ -138,8 +133,7 @@ export default function LandingPage() {
             Sẵn sàng kiểm chứng dữ liệu thực nghiệm?
           </h2>
           <p className="landing-section-body landing-section-body-light" style={{ marginBottom: 40 }}>
-            Khám phá cấu trúc dữ liệu nến, các thí nghiệm walk-forward
-            và nhật ký tín hiệu trực tiếp trên hệ thống cục bộ.
+            Xem lịch sử giá, chọn một mốc trong quá khứ, đưa ra dự đoán của bạn rồi đối chiếu với diễn biến thật.
           </p>
           <div className="landing-cta-group">
             <Link href="/dashboard" className="landing-cta-primary">

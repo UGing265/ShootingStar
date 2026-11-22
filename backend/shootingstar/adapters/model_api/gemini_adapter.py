@@ -198,7 +198,6 @@ class GeminiModelAdapter:
     def analyze(
         self,
         context_payload: Dict[str, Any],
-        approved_lessons: Optional[List[Dict[str, Any]]] = None,
         prompt_version: str = "v1",
         mock_mode: bool = False,
         mock_response: Optional[Dict[str, Any]] = None,
@@ -207,7 +206,7 @@ class GeminiModelAdapter:
         if mock_mode:
             return self._generate_mock_response(context_payload, mock_response)
 
-        prompt_text = self._build_prompt_text(context_payload, approved_lessons)
+        prompt_text = self._build_prompt_text(context_payload)
         request_body = {
             "contents": [
                 {
@@ -226,7 +225,6 @@ class GeminiModelAdapter:
     def _build_prompt_text(
         self,
         context_payload: Dict[str, Any],
-        approved_lessons: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """Constructs strictly bounded system prompt with JSON response schema instruction."""
         schema_instruction = (
@@ -237,20 +235,16 @@ class GeminiModelAdapter:
             "   {\n"
             "     \"direction\": \"UP\" | \"DOWN\" | \"ABSTAIN\",\n"
             "     \"rationale\": \"Lý do giải thích súc tích (tối đa 3 câu) viết hoàn toàn bằng TIẾNG VIỆT\",\n"
-            "     \"evidence_candle_times\": [list of integer open_time_ms timestamps explicitly cited from the input],\n"
-            "     \"lesson_ids\": [list of approved lesson_id strings referenced, or empty list]\n"
+            "     \"evidence_candle_times\": [list of integer open_time_ms timestamps explicitly cited from the input]\n"
             "   }\n"
             "2. LANGUAGE REQUIREMENT: The \"rationale\" field MUST be written entirely in natural, professional Vietnamese (Tiếng Việt). Do NOT write English in rationale.\n"
             "3. Do NOT hallucinate timestamps outside the input window.\n"
-            "4. Do NOT invent probabilities. Return only direction, rationale, evidence_candle_times, and lesson_ids.\n"
+            "4. Do NOT invent probabilities. Return only direction, rationale, and evidence_candle_times.\n"
         )
-        lessons_context = ""
-        if approved_lessons:
-            lessons_context = "\nAPPROVED LESSONS REPOSITORY:\n" + json.dumps(approved_lessons, separators=(",", ":")) + "\n"
 
         input_context = "\nMARKET DATA CONTEXT (STRICTLY CAUSAL BEFORE CUTOFF):\n" + json.dumps(context_payload, separators=(",", ":"))
 
-        return schema_instruction + lessons_context + input_context
+        return schema_instruction + input_context
 
     def _parse_gemini_response(self, response_body_str: str, key_index: int) -> Dict[str, Any]:
         """Parses Gemini JSON response and extracts structured content."""
@@ -264,7 +258,7 @@ class GeminiModelAdapter:
             raise GeminiAPIError("Empty candidate content from Gemini.")
 
         raw_text = parts[0].get("text", "")
-        parsed_payload = json.loads(raw_text)
+        parsed_payload = json.loads(raw_text, strict=False)
 
         # Usage metadata
         usage = data.get("usageMetadata", {})
@@ -298,7 +292,6 @@ class GeminiModelAdapter:
             "direction": "UP",
             "rationale": "Phân tích mô phỏng: Quan sát thấy xung lực tăng giá (bullish momentum) trên chuỗi nến 6 giờ gần nhất trước mốc mua.",
             "evidence_candle_times": evidence_times,
-            "lesson_ids": [],
             "model_id": f"{self.model_name}-mock",
             "key_index": 0,
             "prompt_tokens": 120,
@@ -306,150 +299,6 @@ class GeminiModelAdapter:
             "estimated_cost_usd": 0.0000225,
         }
 
-    def extract_lessons_from_text(
-        self,
-        document_text: str,
-        source_name: str,
-        source_url: str,
-        target_pattern_query: Optional[str] = None,
-        mock_mode: bool = False,
-    ) -> List[Dict[str, Any]]:
-        """Analyzes literature/textbook text and extracts structured candidate lessons."""
-        if mock_mode:
-            return self._generate_mock_extracted_lessons(document_text, target_pattern_query)
-
-        query_instruction = (
-            f"Focus particularly on pattern: {target_pattern_query}."
-            if target_pattern_query
-            else "Identify all prominent candlestick patterns, chart formations, or price action rules in the text."
-        )
-
-        prompt_text = (
-            "You are an expert quantitative technical analysis researcher.\n"
-            "Analyze the following textbook/trading literature excerpt, identify chart/candlestick patterns, and extract structured candidate lessons.\n\n"
-            f"{query_instruction}\n\n"
-            "CRITICAL INSTRUCTIONS:\n"
-            "1. Output MUST be a valid JSON array of objects strictly adhering to this schema:\n"
-            "[\n"
-            "  {\n"
-            "    \"lesson_id\": \"unique_slug_identifying_pattern (e.g. double_bottom, bullish_engulfing)\",\n"
-            "    \"title\": \"Clear pattern title\",\n"
-            "    \"short_definition\": \"Brief definition and recognition rules (max 3 sentences) WRITTEN ENTIRELY IN NATURAL VIETNAMESE (Tiếng Việt)\",\n"
-            "    \"caveats\": \"Limitations, false breakout traps, and volume/context requirements WRITTEN ENTIRELY IN NATURAL VIETNAMESE (Tiếng Việt)\",\n"
-            "    \"source_snippet\": \"Verbatim quote (1-3 sentences) from the input text verifying the pattern\"\n"
-            "  }\n"
-            "]\n"
-            "2. All explanations in short_definition and caveats MUST be in natural Vietnamese (Tiếng Việt).\n"
-            "3. Do NOT invent concepts not supported by the excerpt.\n"
-            "4. If no chart or candlestick patterns are present, return an empty array [].\n\n"
-            f"DOCUMENT EXCERPT (Source: {source_name}):\n"
-            f"{document_text[:8000]}"
-        )
-
-        max_attempts = max(3, self.key_manager.total_slots * 2)
-        last_error: Optional[Exception] = None
-
-        for attempt in range(max_attempts):
-            slot = self.key_manager.get_next_slot()
-            if not slot:
-                if last_error:
-                    raise last_error
-                raise GeminiQuotaExceededError("No available Gemini API key slots.")
-
-            logger.info(
-                "🔑 [Gemini Key Manager - Lessons] Chọn slot #%d (Project: '%s', Key: %s, lần thử %d/%d)",
-                slot.index,
-                slot.project_id,
-                mask_secret(slot.api_key),
-                attempt + 1,
-                max_attempts,
-            )
-            url = self.API_URL_TEMPLATE.format(model=self.model_name, key=slot.api_key)
-            request_body = {
-                "contents": [{"parts": [{"text": prompt_text}]}],
-                "generationConfig": {
-                    "temperature": 0.1,
-                    "response_mime_type": "application/json",
-                },
-            }
-
-            try:
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps(request_body).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=self.timeout_seconds) as response:
-                    res_body = response.read().decode("utf-8")
-                    data = json.loads(res_body)
-                    text_parts = data.get("candidates", [])[0].get("content", {}).get("parts", [])
-                    raw_text = text_parts[0].get("text", "[]") if text_parts else "[]"
-                    lessons = json.loads(raw_text)
-                    if isinstance(lessons, dict):
-                        lessons = [lessons]
-                    return lessons
-            except urllib.error.HTTPError as e:
-                sanitized_msg = re.sub(r'key=[^&\s]+', 'key=[REDACTED]', str(e))
-                if e.code in (401, 403):
-                    self.key_manager.record_401_403(slot.index, str(e))
-                    logger.error("❌ [Gemini Key Rotation - Lessons] Slot #%d bị từ chối xác thực (HTTP %s). Vô hiệu hoá slot...", slot.index, e.code)
-                    last_error = GeminiAuthError(f"Gemini API key in slot #{slot.index} is unauthorized: {sanitized_msg}")
-                    continue
-                elif e.code == 429:
-                    self.key_manager.record_429_quota_exhausted(slot.index, 60.0)
-                    logger.warning("⚠️ [Gemini Key Rotation - Lessons] Slot #%d chạm hạn mức 429. Đang xoay key...", slot.index)
-                    last_error = GeminiQuotaExceededError(f"Project '{slot.project_id}' rate limited (429).")
-                    time.sleep(1.0)
-                    continue
-                elif e.code in (500, 502, 503, 504):
-                    logger.warning("🔄 [Gemini Key Rotation - Lessons] Slot #%d gặp lỗi HTTP %s. Xoay sang key tiếp theo (lần thử %d/%d)...", slot.index, e.code, attempt + 1, max_attempts)
-                    last_error = GeminiAPIError(f"Gemini API HTTP {e.code} error: {sanitized_msg}")
-                    time.sleep(min(1.0 * (1.5 ** min(attempt, 4)), 5.0))
-                    continue
-                else:
-                    raise GeminiAPIError(f"Error querying Gemini for lesson extraction: {sanitized_msg}")
-            except Exception as e:
-                last_error = e
-                if "429" in str(e):
-                    self.key_manager.record_429_quota_exhausted(slot.index, 60.0)
-                    time.sleep(1.0)
-                    continue
-                sanitized_msg = re.sub(r'key=[^&\s]+', 'key=[REDACTED]', str(e))
-                raise GeminiAPIError(f"Error querying Gemini for lesson extraction: {sanitized_msg}")
-        if last_error:
-            raise last_error
-        raise GeminiAPIError("Exhausted all Gemini retry attempts during lesson extraction.")
-
-    def _generate_mock_extracted_lessons(
-        self,
-        document_text: str,
-        target_pattern_query: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Generates deterministic mock extracted lessons grounded in document_text."""
-        if not document_text or not document_text.strip():
-            return []
-
-        if target_pattern_query:
-            query_clean = target_pattern_query.lower()
-            if query_clean not in document_text.lower():
-                return []
-            slug = query_clean.replace(" ", "_")
-            idx = document_text.lower().find(query_clean)
-            start_idx = max(0, idx - 50)
-            end_idx = min(len(document_text), idx + 200)
-            real_snippet = document_text[start_idx:end_idx].strip()
-            return [
-                {
-                    "lesson_id": slug,
-                    "title": target_pattern_query,
-                    "short_definition": f"Mô hình {target_pattern_query} được trích xuất từ tài liệu đối chiếu.",
-                    "caveats": "Cần kiểm tra kỹ điều kiện thị trường và xác nhận khối lượng trước khi áp dụng.",
-                    "source_snippet": real_snippet,
-                }
-            ]
-
-        return []
 
     def analyze_preliminary(
         self,
@@ -502,7 +351,7 @@ class GeminiModelAdapter:
         if not candidates:
             raise GeminiAPIError("No candidates returned for preliminary analysis.")
         raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
-        parsed = json.loads(raw_text)
+        parsed = json.loads(raw_text, strict=False)
 
         obs = [
             HypothesisObservation(
@@ -861,7 +710,7 @@ class GeminiModelAdapter:
             raise GeminiAPIError("No candidates returned from report synthesis.")
 
         raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
-        parsed = json.loads(raw_text)
+        parsed = json.loads(raw_text, strict=False)
 
         # Extract tokens and cost
         usage = data.get("usageMetadata", {})
@@ -974,7 +823,6 @@ class GeminiModelAdapter:
                 "gioi_han_va_kha_nang_ap_dung": sec_7,
             },
             "evidence_candle_times": evidence_times,
-            "lesson_ids": [],
             "model_id": f"{self.model_name}-evidence-synthesizer",
             "key_index": 0,
             "prompt_tokens": 1500,

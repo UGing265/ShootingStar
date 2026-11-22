@@ -1,17 +1,14 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 const MAIN_NAV = [
   { href: '/dashboard', label: 'Tổng quan' },
   { href: '/data', label: 'Lịch sử giá' },
-  { href: '/replay', label: 'Mô phỏng (Replay)' },
-  { href: '/lessons/review', label: 'Bài học trading' },
-  { href: '/research', label: 'Kết quả thử nghiệm' },
-  { href: '/patterns', label: 'Mẫu hình giá' },
-  { href: '/signals', label: 'Dự đoán' },
+  { href: '/replay', label: 'Mô phỏng' },
+  { href: '/report', label: 'Báo cáo' },
 ];
 
 const SECONDARY_NAV = [
@@ -19,18 +16,13 @@ const SECONDARY_NAV = [
   { href: '/about', label: 'Phương pháp' },
 ];
 
-/** Match active nav: /research/123 matches /research, but /researching does not. */
+/** Match active nav: /report/123 matches /report, but /reporting does not. */
 function isActive(pathname: string, href: string): boolean {
   if (href === '/') return pathname === '/';
-  // exact match or segment prefix
   return pathname === href || pathname.startsWith(href + '/');
 }
 
-function NavLinks({
-  onClick,
-}: {
-  onClick?: () => void;
-}) {
+function NavLinks({ onClick }: { onClick?: () => void }) {
   const pathname = usePathname();
   return (
     <>
@@ -58,7 +50,7 @@ function NavLinks({
             <Link
               key={item.href}
               href={item.href}
-              className={`sidebar-link sidebar-link-secondary${active ? ' sidebar-link-active' : ''}`}
+              className={`sidebar-link${active ? ' sidebar-link-active' : ''}`}
               aria-current={active ? 'page' : undefined}
               onClick={onClick}
             >
@@ -82,16 +74,15 @@ export function Sidebar() {
     setOpen(false);
   }, [pathname]);
 
-  // Return focus to toggle button when drawer closes
+  // Return focus to the toggle button when the drawer closes
   const close = useCallback(() => {
     setOpen(false);
-    // Defer so the drawer is actually gone before we move focus
     requestAnimationFrame(() => {
       toggleBtnRef.current?.focus();
     });
   }, []);
 
-  // Escape key closes drawer
+  // Escape closes the drawer
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -101,35 +92,28 @@ export function Sidebar() {
     return () => document.removeEventListener('keydown', handler);
   }, [open, close]);
 
-  // Focus trap: when drawer opens, focus first link
+  // Focus the first control when the drawer opens
   useEffect(() => {
     if (!open) return;
-    const firstLink = drawerRef.current?.querySelector<HTMLElement>('a, button');
-    firstLink?.focus();
+    drawerRef.current?.querySelector<HTMLElement>('a, button')?.focus();
   }, [open]);
 
-  // Focus trap loop inside drawer
+  // Keep Tab focus inside the open drawer
   useEffect(() => {
     if (!open || !drawerRef.current) return;
     const drawer = drawerRef.current;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return;
-      const focusable = drawer.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled])'
-      );
+      const focusable = drawer.querySelectorAll<HTMLElement>('a[href], button:not([disabled])');
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (e.shiftKey) {
-        if (document.activeElement === first) {
-          e.preventDefault();
-          last?.focus();
-        }
-      } else {
-        if (document.activeElement === last) {
-          e.preventDefault();
-          first?.focus();
-        }
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
       }
     };
     drawer.addEventListener('keydown', handleKeyDown);
@@ -138,43 +122,32 @@ export function Sidebar() {
 
   return (
     <>
-      {/* ── Desktop sidebar ── */}
       <aside className="sidebar-desktop" aria-label="Điều hướng làm việc">
         <div className="sidebar-brand">
-          <Link href="/" className="sidebar-brand-link">
-            <span className="sidebar-brand-icon">✦</span>
+          <Link href="/dashboard" className="sidebar-brand-link">
+            <span className="sidebar-brand-icon" aria-hidden="true">✦</span>
             <span className="sidebar-brand-name">ShootingStar</span>
           </Link>
         </div>
         <NavLinks />
       </aside>
 
-      {/* ── Mobile toggle button ── */}
       <button
         ref={toggleBtnRef}
+        type="button"
         className="sidebar-mobile-toggle"
-        aria-label="Mở mục làm việc"
+        aria-label="Mở menu"
         aria-expanded={open}
         aria-controls="sidebar-drawer"
         onClick={() => setOpen(true)}
       >
-        <span className="sidebar-hamburger" aria-hidden="true">☰</span>
-        <span>Mục làm việc</span>
+        <span aria-hidden="true">☰</span>
+        <span>Menu</span>
       </button>
 
-      {/* ── Mobile overlay backdrop ── */}
-      {open && (
-        <div
-          className="sidebar-overlay"
-          aria-hidden="true"
-          onClick={close}
-        />
-      )}
+      {open && <div className="sidebar-overlay" aria-hidden="true" onClick={close} />}
 
-      {/* ── Mobile drawer ── */}
-      {/* inert removes element from Tab order and AT tree when closed;
-          aria-hidden alone does NOT block Tab focus.
-          React 19 supports inert as a boolean prop. */}
+      {/* inert removes the closed drawer from Tab order and the accessibility tree. */}
       <div
         id="sidebar-drawer"
         ref={drawerRef}
@@ -186,11 +159,7 @@ export function Sidebar() {
       >
         <div className="sidebar-drawer-header">
           <span className="sidebar-brand-name">ShootingStar</span>
-          <button
-            className="sidebar-drawer-close"
-            aria-label="Đóng menu"
-            onClick={close}
-          >
+          <button type="button" className="sidebar-drawer-close" aria-label="Đóng menu" onClick={close}>
             ✕
           </button>
         </div>

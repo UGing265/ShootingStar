@@ -3,6 +3,8 @@
 > **A local-first, evidence-first research platform for BTCUSDT 30-minute predictive modeling.**  
 > *Zero hype. Zero fabricated win rates. Zero zero-slippage curves.*
 
+> **Cập nhật 2026-11-21:** phần tự huấn luyện model, Pattern Lab thống kê, lessons và các trang research/signals/patterns đã được gỡ. Các mục nói về chúng dưới đây giữ làm ghi chép lịch sử; sản phẩm hiện chỉ còn ingestion, snapshot, mô phỏng và báo cáo Gemini.
+
 ---
 
 ## 1. Executive Summary & Core Research Question
@@ -38,7 +40,7 @@ ShootingStar categorically rejects common retail marketing fallacies:
 
 ### Fallacy 3: "Candlestick Patterns Guarantee Reversals"
 - **Cause:** Visual survivorship bias (remembering the hammer that preceded a rally, ignoring the 50 that failed).
-- **ShootingStar Countermeasure:** Declarative, mathematical Rule-Based Pattern Lab (`backend/shootingstar/application/patterns.py`). Các mẫu hình được định nghĩa bằng quy tắc hình học rõ ràng và kiểm định out-of-sample độc lập; không một mẫu hình đơn lẻ nào được tự ý gán nhãn win rate hay coi là edge khi chưa có kiểm chứng độc lập.
+- **ShootingStar Countermeasure:** Tiêu chí nến chỉ được dùng làm bằng chứng mô tả trong báo cáo, tính bằng quy tắc cố định trên nến đã đóng tới thời điểm dự báo (`backend/shootingstar/application/patterns.py`). Hệ thống không gán win rate, không coi mẫu nến là edge; thống kê Pattern Lab đã gỡ.
 ---
 
 ## 3. Methodological Rigor & Data Provenance
@@ -49,12 +51,12 @@ ShootingStar categorically rejects common retail marketing fallacies:
    Snapshots are stored in Apache Parquet format and sealed with an immutable SHA-256 hash. Rebuilding from raw bytes reproduces the exact bit-for-bit SHA-256 hash (`tests/test_storage_and_ingestion.py`).
 3. **Decoupled Data Availability:**
    Interval closure (`close_time_ms`) is strictly separated from data availability (`available_at_ms`). Historical backfills require positive latency assumptions ($\ge 1000\,\text{ms}$) to avoid hindsight bias.
-4. **Purged Walk-Forward Splitting:**
-   A mandatory 6-candle (30-minute) embargo gap is enforced between Train, Calibration, and Test splits to eliminate overlap leakage (`src/shootingstar/application/splits.py`).
-5. **Platt Calibration:**
-   Model probabilities are calibrated using 1D logistic regression over an independent calibration fold.
-6. **Append-Only Signal Predictions:**
-   Model predictions are stored in an append-only database table (`signal_predictions`). Maturation outcomes are recorded in a separate table (`signal_outcomes`) with a 1-to-1 foreign key, preventing retroactive rewrites.
+4. **Purged Walk-Forward Splitting (đã gỡ cùng phần tự huấn luyện):**
+   Quy tắc embargo 6 nến (30 phút) từng được áp dụng giữa Train, Calibration và Test để loại bỏ rò rỉ chồng lấn; sản phẩm hiện tại không còn luồng train.
+5. **Platt Calibration (đã gỡ cùng phần tự huấn luyện):**
+   Xác suất model từng được hiệu chỉnh bằng hồi quy logistic 1 chiều trên fold calibration độc lập; không còn trong sản phẩm hiện tại.
+6. **Append-Only Replay Reports:**
+   Mỗi báo cáo Gemini được lưu trước khi kết quả được reveal và không bị viết lại hồi tố; kết quả thực tế được tính riêng từ nến đã đóng.
 
 ---
 

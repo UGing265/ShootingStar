@@ -1,19 +1,13 @@
-"""Causal Replay Session Engine enforcing strict zero-lookahead stepping."""
+"""Simulation job engine: point-in-time buy simulation with zero-lookahead, user vote and outcome reveal."""
 
-from dataclasses import dataclass, field
-import hashlib
+from dataclasses import dataclass
 import json
 import logging
 from pathlib import Path
-import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 import uuid
 
-import numpy as np
-
 from shootingstar.adapters.storage import SnapshotStorage
-from shootingstar.application.features import FeatureExtractionService
-from shootingstar.application.training.modeling import CalibratedLogisticRegressionModel
 from shootingstar.domain.exceptions import DomainError
 from shootingstar.domain.models import Candle, Timeframe
 
@@ -122,11 +116,9 @@ class SimulationJobManager:
     def __init__(
         self,
         snapshot_storage: Optional[SnapshotStorage] = None,
-        models_dir: Optional[Path] = None,
         simulations_dir: Optional[Path] = None,
     ):
         self.snapshot_storage = snapshot_storage or SnapshotStorage()
-        self.models_dir = models_dir or Path("data/models")
         self.simulations_dir = simulations_dir or Path("data/simulations")
         self.simulations_dir.mkdir(parents=True, exist_ok=True)
         self._jobs: Dict[str, SimulationJob] = {}
@@ -153,7 +145,6 @@ class SimulationJobManager:
         buy_time_ms: int,
         buy_price: float,
         horizon_minutes: int = 30,
-        model_artifact_hash: Optional[str] = None,
     ) -> SimulationJob:
         candles = self.snapshot_storage.load_snapshot(snapshot_path)
         if not candles:
@@ -187,7 +178,6 @@ class SimulationJobManager:
             visible_candles=visible_candles,
             buy_time_ms=buy_time_ms,
             horizon_minutes=horizon_minutes,
-            model_artifact_hash=model_artifact_hash,
         )
 
         # Evaluate fast-entry 30m barrier strategy offline without lookahead
@@ -299,50 +289,12 @@ class SimulationJobManager:
         visible_candles: List[Candle],
         buy_time_ms: int,
         horizon_minutes: int,
-        model_artifact_hash: Optional[str],
     ) -> SimulationAIPrediction:
-        if not model_artifact_hash:
-            return SimulationAIPrediction(
-                predicted_direction="NO_MODEL",
-                evidence_summary="Chưa chỉ định model artifact kiểm định. Vui lòng chọn model đã được đánh giá.",
-            )
-
-        manifest_file = self.models_dir / f"{model_artifact_hash}.manifest.json"
-        if not manifest_file.exists():
-            return SimulationAIPrediction(
-                predicted_direction="NO_MODEL",
-                evidence_summary=f"Model manifest không tồn tại cho artifact hash {model_artifact_hash}.",
-            )
-
-        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
-        if not manifest.get("is_selected_winner", False):
-            return SimulationAIPrediction(
-                predicted_direction="NO_MODEL",
-                evidence_summary="Model artifact chưa được kiểm định là validation winner.",
-            )
-
-        train_end_ms = manifest.get("train_end_ms")
-        if train_end_ms is not None and train_end_ms >= buy_time_ms:
-            return SimulationAIPrediction(
-                predicted_direction="NO_MODEL",
-                model_cutoff_ms=train_end_ms,
-                evidence_summary=f"Cutoff huấn luyện ({train_end_ms}) vi phạm zero-lookahead đối với mốc mua ({buy_time_ms}).",
-            )
-
-        if manifest.get("horizon_minutes", 30) != horizon_minutes:
-            return SimulationAIPrediction(
-                predicted_direction="NO_MODEL",
-                evidence_summary=f"Model được huấn luyện cho horizon {manifest.get('horizon_minutes')}m, không khớp với {horizon_minutes}m.",
-            )
-
-        # Invariant (Phase 02 Gate): The existing generic model was trained on close-to-close returns.
-        # ShootingStar has not yet completed a point-price relative pipeline with out-of-sample validation.
-        # Unconditional NO_MODEL fallback protects against false or uncalibrated probabilities.
+        # No trained model exists. Directional AI opinion comes only from the external Gemini
+        # report (/external-analysis/jobs), never from this engine.
         return SimulationAIPrediction(
             predicted_direction="NO_MODEL",
-            model_cutoff_ms=train_end_ms,
-            evidence_summary="Hệ thống chưa có mô hình được huấn luyện theo mục tiêu giá tương lai so với giá mua giả định (point-price target) kèm kiểm định ngoài mẫu OOS. Theo nguyên tắc Accuracy Before Speed, hệ thống từ chối ngoại suy xác suất.",
-            is_calibrated=False,
+            evidence_summary="Không có mô hình tự huấn luyện. Dùng báo cáo phân tích ngoài (external-analysis) để có nhận định AI.",
         )
 
     def get_job(self, job_id: str) -> SimulationJob:
@@ -516,246 +468,3 @@ class SimulationJobManager:
         job.status = "REVEALED"
         self._persist_job(job)
         return job
-@dataclass
-class ReplayPrediction:
-    prediction_id: str
-    candle_time_ms: int
-    horizon_time_ms: int  # candle_time_ms + 30m
-    probability_up: float
-    probability_down: float
-    predicted_direction: str  # "UP" or "DOWN"
-    status: str  # "PENDING", "EVALUATED", "UNSCORABLE"
-    realized_label: Optional[str] = None
-    realized_return: Optional[float] = None
-    unscorable_reason: Optional[str] = None
-
-
-@dataclass
-class ReplaySession:
-    session_id: str
-    snapshot_path: Path
-    symbol: str
-    timeframe: str
-    start_time_ms: int  # t0
-    current_time_ms: int  # t_cursor
-    max_time_ms: int
-    model_artifact_hash: Optional[str] = None
-    model_manifest: Optional[dict] = None
-    predictions: List[ReplayPrediction] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class ReplayView:
-    session_id: str
-    symbol: str
-    timeframe: str
-    start_time_ms: int
-    current_time_ms: int
-    max_time_ms: int
-    visible_candles_count: int
-    model_attached: bool
-    model_cutoff_ms: Optional[int]
-    recent_candles: List[Candle]
-    predictions: List[ReplayPrediction]
-
-
-class ReplaySessionManager:
-    """Manages causal historical replay sessions with strict forward-only stepping and zero lookahead."""
-
-    def __init__(
-        self,
-        snapshot_storage: Optional[SnapshotStorage] = None,
-        models_dir: Optional[Path] = None,
-        assumed_latency_ms: int = 1,
-    ):
-        self.snapshot_storage = snapshot_storage or SnapshotStorage()
-        self.models_dir = models_dir or Path("data/models")
-        self.assumed_latency_ms = assumed_latency_ms
-        self._sessions: Dict[str, ReplaySession] = {}
-        self._cached_candles: Dict[str, List[Candle]] = {}
-        self._cached_models: Dict[str, CalibratedLogisticRegressionModel] = {}
-
-    def create_session(
-        self,
-        snapshot_path: Path,
-        start_time_ms: int,
-        model_artifact_hash: Optional[str] = None,
-    ) -> ReplaySession:
-        """Initializes a causal replay session at start_time_ms (t0)."""
-        candles = self.snapshot_storage.load_snapshot(snapshot_path)
-        if not candles:
-            raise DomainError(f"Snapshot has no candles: {snapshot_path}")
-
-        snap_start_ms = candles[0].open_time_ms
-        snap_end_ms = candles[-1].close_time_ms
-
-        if start_time_ms < snap_start_ms or start_time_ms > snap_end_ms:
-            raise DomainError(
-                f"start_time_ms ({start_time_ms}) outside snapshot bounds [{snap_start_ms}, {snap_end_ms}]"
-            )
-
-        symbol = candles[0].symbol
-        timeframe = candles[0].timeframe
-        session_id = str(uuid.uuid4())
-
-        model_manifest = None
-        if model_artifact_hash:
-            manifest_file = self.models_dir / f"{model_artifact_hash}.manifest.json"
-            if not manifest_file.exists():
-                raise DomainError(f"Model manifest not found for artifact hash {model_artifact_hash}")
-
-            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
-            if not manifest.get("is_selected_winner", False):
-                raise DomainError(
-                    f"Model artifact {model_artifact_hash} was not selected as validation winner. "
-                    f"Only validated winner models can generate replay predictions."
-                )
-
-            train_end_ms = manifest.get("train_end_ms")
-            if train_end_ms is not None and train_end_ms >= start_time_ms:
-                raise DomainError(
-                    f"Model training cutoff ({train_end_ms}) leaks into or overlaps replay start time (t0={start_time_ms}). "
-                    f"Model must have been trained strictly prior to t0 (train_end_ms < t0)."
-                )
-            model_manifest = manifest
-
-            # Pre-load model artifact with full SHA-256 verification
-            model_matches = list(self.models_dir.glob(f"*{model_artifact_hash[:10]}*.joblib"))
-            if not model_matches:
-                raise DomainError(f"Model artifact file not found for hash {model_artifact_hash}")
-            art_file = model_matches[0]
-            computed_sha = hashlib.sha256(art_file.read_bytes()).hexdigest()
-            if computed_sha != model_artifact_hash:
-                raise DomainError(
-                    f"Model artifact SHA-256 mismatch: expected {model_artifact_hash}, got {computed_sha}"
-                )
-            self._cached_models[session_id] = CalibratedLogisticRegressionModel.load_artifact(art_file)
-        session = ReplaySession(
-            session_id=session_id,
-            snapshot_path=snapshot_path,
-            symbol=symbol,
-            timeframe=timeframe,
-            start_time_ms=start_time_ms,
-            current_time_ms=start_time_ms,
-            max_time_ms=snap_end_ms,
-            model_artifact_hash=model_artifact_hash,
-            model_manifest=model_manifest,
-        )
-
-        self._sessions[session_id] = session
-        self._cached_candles[session_id] = candles
-
-        # Check and mature any initial state
-        self._evaluate_step_predictions(session)
-        return session
-
-    def get_session(self, session_id: str) -> ReplaySession:
-        session = self._sessions.get(session_id)
-        if not session:
-            raise DomainError(f"Replay session {session_id} not found")
-        return session
-
-    def step(self, session_id: str, steps: int = 1) -> ReplayView:
-        """Advances replay cursor forward by `steps` candles and generates causal predictions."""
-        if steps <= 0:
-            raise DomainError("steps must be a positive integer")
-
-        session = self.get_session(session_id)
-        tf = Timeframe(session.timeframe)
-        step_duration_ms = tf.duration_ms
-
-        new_current = min(session.current_time_ms + (steps * step_duration_ms), session.max_time_ms)
-        session.current_time_ms = new_current
-
-        # Trigger prediction generation & maturation for the advanced cursor
-        self._evaluate_step_predictions(session)
-        return self.get_view(session_id)
-
-    def get_view(self, session_id: str, recent_candles_limit: int = 500) -> ReplayView:
-        """Retrieves currently visible state. STRICTLY DENIES any future candle access."""
-        session = self.get_session(session_id)
-        candles = self._cached_candles[session_id]
-
-        # Strictly visible candles: close_time_ms <= current_time_ms
-        visible_candles = [c for c in candles if c.close_time_ms <= session.current_time_ms]
-        recent = visible_candles[-recent_candles_limit:] if visible_candles else []
-
-        cutoff_ms = session.model_manifest.get("train_end_ms") if session.model_manifest else None
-
-        return ReplayView(
-            session_id=session.session_id,
-            symbol=session.symbol,
-            timeframe=session.timeframe,
-            start_time_ms=session.start_time_ms,
-            current_time_ms=session.current_time_ms,
-            max_time_ms=session.max_time_ms,
-            visible_candles_count=len(visible_candles),
-            model_attached=session.model_artifact_hash is not None,
-            model_cutoff_ms=cutoff_ms,
-            recent_candles=recent,
-            predictions=list(session.predictions),
-        )
-
-    def _evaluate_step_predictions(self, session: ReplaySession) -> None:
-        """Generates predictions for current step and matures older predictions whose 30m horizon has elapsed."""
-        candles = self._cached_candles[session.session_id]
-        visible_candles = [c for c in candles if c.close_time_ms <= session.current_time_ms]
-        if not visible_candles:
-            return
-
-        latest_candle = visible_candles[-1]
-        candle_t = latest_candle.close_time_ms
-        horizon_ms = 30 * 60 * 1000  # 30 minutes
-
-        # 1. Mature existing pending predictions
-        candle_map = {c.open_time_ms: c for c in visible_candles}
-        for pred in session.predictions:
-            if pred.status == "PENDING" and session.current_time_ms >= pred.horizon_time_ms:
-                # Find entry price and target price
-                entry_candle = next((c for c in visible_candles if c.close_time_ms == pred.candle_time_ms), None)
-                target_candle = next((c for c in visible_candles if c.close_time_ms == pred.horizon_time_ms), None)
-
-                if entry_candle and target_candle:
-                    p_entry = entry_candle.close
-                    p_exit = target_candle.close
-                    ret_30m = (p_exit - p_entry) / p_entry
-                    pred.realized_return = ret_30m
-                    pred.realized_label = "UP" if ret_30m > 0 else "DOWN"
-                    pred.status = "EVALUATED"
-                else:
-                    pred.status = "UNSCORABLE"
-                    pred.unscorable_reason = "Missing candles during 30m maturation horizon"
-
-        # 2. Generate new prediction at current step if model is attached
-        if session.session_id in self._cached_models:
-            # Check if prediction for this candle timestamp already exists
-            if not any(p.candle_time_ms == candle_t for p in session.predictions):
-                # Extract features causality: features using only candles <= latest_candle
-                # We need at least 30 candles to compute rolling features
-                if len(visible_candles) >= 30:
-                    feat_service = FeatureExtractionService(assumed_latency_ms=self.assumed_latency_ms)
-                    feat_matrix = feat_service.extract_matrix(visible_candles)
-                    # Strict availability invariant: row only valid if available_at_ms <= current_time_ms
-                    available_indices = [
-                        idx for idx, avail_t in enumerate(feat_matrix.timestamps_ms)
-                        if avail_t <= session.current_time_ms
-                    ]
-                    if not available_indices:
-                        return
-
-                    latest_idx = available_indices[-1]
-                    latest_features = feat_matrix.values[latest_idx].reshape(1, -1)
-                    model = self._cached_models[session.session_id]
-                    proba = model.predict_proba(latest_features)[0]  # [P(DOWN), P(UP)]
-                    p_down, p_up = float(proba[0]), float(proba[1])
-                    direction = "UP" if p_up >= 0.5 else "DOWN"
-                    pred_record = ReplayPrediction(
-                        prediction_id=str(uuid.uuid4()),
-                        candle_time_ms=candle_t,
-                        horizon_time_ms=candle_t + horizon_ms,
-                        probability_up=p_up,
-                        probability_down=p_down,
-                        predicted_direction=direction,
-                        status="PENDING",
-                    )
-                    session.predictions.append(pred_record)

@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useMemo, useCallback, useId } from 'react';
 import { useRouter } from 'next/navigation';
 import { CandleDTO } from './types';
-import { Card, Badge } from '@/shared/ui/primitives';
+import { Card, Badge, Notice } from '@/shared/ui/primitives';
+import { formatDateTime, formatInt, formatUsd } from '@/shared/format';
 
 interface SnapshotMeta {
   id: string;
@@ -25,6 +26,24 @@ interface CandlestickChartProps {
   allSnapshots?: SnapshotMeta[];
 }
 
+const UTC7_MS = 7 * 3600 * 1000;
+const CHART_HEIGHT = 460;
+const PADDING_RIGHT = 75;
+
+const COLOR = {
+  grid: '#f0f0f0',
+  axis: '#e0e0e0',
+  label: '#6e6e73',
+  crosshair: '#a1a1a6',
+  up: '#1d8348',
+  down: '#c0392b',
+  upVolume: 'rgba(29, 131, 72, 0.28)',
+  downVolume: 'rgba(192, 57, 43, 0.28)',
+  gap: '#8a5a00',
+};
+
+const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+
 export function CandlestickChart({
   initialCandles,
   timeframe,
@@ -36,6 +55,7 @@ export function CandlestickChart({
   allSnapshots,
 }: CandlestickChartProps) {
   const router = useRouter();
+  const uid = useId();
   const [candles, setCandles] = useState<CandleDTO[]>(initialCandles);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -50,8 +70,12 @@ export function CandlestickChart({
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   const [showTable, setShowTable] = useState<boolean>(false);
   const [useUtc7, setUseUtc7] = useState<boolean>(true);
-  const tzOffsetMs = useUtc7 ? 7 * 3600 * 1000 : 0;
   const tzLabel = useUtc7 ? 'UTC+7' : 'UTC';
+  // shared/format.ts always renders UTC+7; shifting back by 7h yields plain UTC.
+  const showTime = useCallback(
+    (ms: number) => formatDateTime(useUtc7 ? ms : ms - UTC7_MS),
+    [useUtc7]
+  );
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const dragStartXRef = useRef<number>(0);
   const dragStartOffsetRef = useRef<number>(0);
@@ -59,7 +83,6 @@ export function CandlestickChart({
   const [rangeStart, setRangeStart] = useState<string>('');
   const [rangeEnd, setRangeEnd] = useState<string>('');
 
-  // Synchronize when initialCandles changes
   // Synchronize when initialCandles or snapshotId changes
   useEffect(() => {
     setCandles(initialCandles);
@@ -68,17 +91,14 @@ export function CandlestickChart({
     setHoveredIndex(null);
     setMousePos(null);
   }, [initialCandles, snapshotId]);
+
   // Auto-populate date range picker from snapshot metadata
   useEffect(() => {
     if (snapshotStartMs !== undefined && snapshotEndMs !== undefined) {
-      const formatLocalIso = (ms: number) => {
-        const d = new Date(ms + tzOffsetMs);
-        return d.toISOString().slice(0, 16);
-      };
-      setRangeStart(formatLocalIso(snapshotStartMs));
-      setRangeEnd(formatLocalIso(snapshotEndMs));
+      setRangeStart(showTime(snapshotStartMs).replace(' ', 'T'));
+      setRangeEnd(showTime(snapshotEndMs).replace(' ', 'T'));
     }
-  }, [snapshotStartMs, snapshotEndMs, tzOffsetMs]);
+  }, [snapshotStartMs, snapshotEndMs, showTime]);
 
   const intervalMs = timeframe === '5m' ? 5 * 60 * 1000 : 60 * 1000;
 
@@ -164,6 +184,51 @@ export function CandlestickChart({
     }
   };
 
+  const applyRange = () => {
+    const parseInputDate = (s: string): { val?: number; error?: string } => {
+      const trimmed = s.trim();
+      if (!trimmed) return {};
+      let ms: number;
+      const withSec = trimmed.length === 16 ? `${trimmed}:00` : trimmed;
+      const hasExplicitTz = /(Z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
+      if (hasExplicitTz) {
+        ms = Date.parse(trimmed);
+      } else if (useUtc7) {
+        ms = Date.parse(`${withSec}+07:00`);
+      } else {
+        ms = Date.parse(`${withSec}Z`);
+      }
+      if (isNaN(ms)) {
+        return { error: `Định dạng thời gian không hợp lệ: "${s}".` };
+      }
+      return { val: ms };
+    };
+
+    let startMs: number | undefined = undefined;
+    let endMs: number | undefined = undefined;
+    if (rangeStart) {
+      const res = parseInputDate(rangeStart);
+      if (res.error) {
+        setFetchError(res.error);
+        return;
+      }
+      startMs = res.val;
+    }
+    if (rangeEnd) {
+      const res = parseInputDate(rangeEnd);
+      if (res.error) {
+        setFetchError(res.error);
+        return;
+      }
+      endMs = res.val;
+    }
+    if (startMs !== undefined && endMs !== undefined && startMs > endMs) {
+      setFetchError('Thời gian bắt đầu phải nhỏ hơn hoặc bằng thời gian kết thúc.');
+      return;
+    }
+    fetchWindow(startMs, endMs);
+  };
+
   // Canvas drawing
   const renderChart = useCallback(() => {
     const canvas = canvasRef.current;
@@ -177,20 +242,19 @@ export function CandlestickChart({
     ctx.clearRect(0, 0, width, height);
 
     if (visibleCandles.length === 0) {
-      ctx.fillStyle = '#7a7a7a';
-      ctx.font = '14px -apple-system, sans-serif';
+      ctx.fillStyle = COLOR.label;
+      ctx.font = `14px ${FONT}`;
       ctx.textAlign = 'center';
       ctx.fillText('Không có dữ liệu nến trong khoảng được chọn', width / 2, height / 2);
       return;
     }
 
-    const paddingRight = 75;
     const paddingBottom = 30;
     const chartHeight = height - paddingBottom;
     const mainChartHeight = chartHeight * 0.75;
     const volumeChartHeight = chartHeight * 0.22;
     const volumeTop = mainChartHeight + (chartHeight * 0.03);
-    const plotWidth = width - paddingRight;
+    const plotWidth = width - PADDING_RIGHT;
 
     let minPrice = Infinity;
     let maxPrice = -Infinity;
@@ -207,10 +271,10 @@ export function CandlestickChart({
     const paddedMax = maxPrice + priceRange * 0.05;
     const paddedRange = paddedMax - paddedMin;
 
-    ctx.strokeStyle = '#f0f0f2';
+    ctx.strokeStyle = COLOR.grid;
     ctx.lineWidth = 1;
-    ctx.fillStyle = '#7a7a7a';
-    ctx.font = '11px -apple-system, ui-monospace, monospace';
+    ctx.fillStyle = COLOR.label;
+    ctx.font = `11px ${FONT}`;
     ctx.textAlign = 'left';
 
     // Horizontal price grid lines (5 levels)
@@ -221,7 +285,7 @@ export function CandlestickChart({
       ctx.moveTo(0, y);
       ctx.lineTo(plotWidth, y);
       ctx.stroke();
-      ctx.fillText(`$${price.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}`, plotWidth + 6, y + 4);
+      ctx.fillText(`$${price.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}`, plotWidth + 6, y + 4);
     }
 
     const candleSlotWidth = plotWidth / visibleCandles.length;
@@ -231,14 +295,15 @@ export function CandlestickChart({
     for (let i = 0; i < visibleCandles.length; i++) {
       const c = visibleCandles[i];
       const isUp = c.close >= c.open;
-      const color = isUp ? '#34c759' : '#ff3b30';
+      const color = isUp ? COLOR.up : COLOR.down;
       const x = i * candleSlotWidth + candleSlotWidth / 2;
 
       // Gap marker
       if (i > 0) {
         const gapMs = c.open_time_ms - visibleCandles[i - 1].close_time_ms;
         if (gapMs > 1000) {
-          ctx.strokeStyle = '#ff9500';
+          ctx.strokeStyle = COLOR.gap;
+          ctx.lineWidth = 1;
           ctx.setLineDash([2, 4]);
           ctx.beginPath();
           ctx.moveTo(x - candleSlotWidth / 2, 0);
@@ -269,35 +334,34 @@ export function CandlestickChart({
 
       // Volume bar
       const vH = maxVolume > 0 ? (c.volume / maxVolume) * volumeChartHeight : 0;
-      ctx.fillStyle = isUp ? 'rgba(52, 199, 89, 0.4)' : 'rgba(255, 59, 48, 0.4)';
+      ctx.fillStyle = isUp ? COLOR.upVolume : COLOR.downVolume;
       ctx.fillRect(x - candleBodyWidth / 2, chartHeight - vH, candleBodyWidth, vH);
     }
 
     // Baseline and time separator
-    ctx.strokeStyle = '#e5e5ea';
+    ctx.strokeStyle = COLOR.axis;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, chartHeight);
     ctx.lineTo(width, chartHeight);
     ctx.stroke();
 
-    ctx.strokeStyle = '#f0f0f2';
+    ctx.strokeStyle = COLOR.grid;
     ctx.beginPath();
     ctx.moveTo(0, volumeTop);
     ctx.lineTo(plotWidth, volumeTop);
     ctx.stroke();
 
-    // Time labels
-    ctx.fillStyle = '#7a7a7a';
-    ctx.font = '11px -apple-system, monospace';
+    // Time labels (MM-DD HH:mm)
+    ctx.fillStyle = COLOR.label;
+    ctx.font = `11px ${FONT}`;
     ctx.textAlign = 'center';
     const step = Math.max(1, Math.floor(visibleCandles.length / 6));
 
     for (let i = 0; i < visibleCandles.length; i += step) {
       const c = visibleCandles[i];
       const x = i * candleSlotWidth + candleSlotWidth / 2;
-      const d = new Date(c.open_time_ms + tzOffsetMs);
-      ctx.fillText(`${d.toISOString().slice(5, 10)} ${d.toISOString().slice(11, 16)}`, x, chartHeight + 16);
+      ctx.fillText(showTime(c.open_time_ms).slice(5), x, chartHeight + 16);
     }
 
     // Hover crosshair
@@ -305,7 +369,8 @@ export function CandlestickChart({
       const x = hoveredIndex * candleSlotWidth + candleSlotWidth / 2;
       const y = mousePos.y;
 
-      ctx.strokeStyle = '#a1a1a6';
+      ctx.strokeStyle = COLOR.crosshair;
+      ctx.lineWidth = 1;
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
       ctx.moveTo(x, 0);
@@ -320,7 +385,7 @@ export function CandlestickChart({
       }
       ctx.setLineDash([]);
     }
-  }, [visibleCandles, mousePos, hoveredIndex, tzOffsetMs]);
+  }, [visibleCandles, mousePos, hoveredIndex, showTime]);
 
   const renderChartRef = useRef<() => void>(() => {});
   renderChartRef.current = renderChart;
@@ -332,11 +397,10 @@ export function CandlestickChart({
     const applySize = (width: number) => {
       if (!canvasRef.current) return;
       const dpr = window.devicePixelRatio || 1;
-      const height = 460;
       canvasRef.current.width = Math.round(width * dpr);
-      canvasRef.current.height = Math.round(height * dpr);
+      canvasRef.current.height = Math.round(CHART_HEIGHT * dpr);
       canvasRef.current.style.width = `${width}px`;
-      canvasRef.current.style.height = `${height}px`;
+      canvasRef.current.style.height = `${CHART_HEIGHT}px`;
 
       const ctx = canvasRef.current.getContext('2d');
       if (ctx) {
@@ -362,6 +426,7 @@ export function CandlestickChart({
   useEffect(() => {
     renderChart();
   }, [renderChart]);
+
   // Mouse wheel zoom on canvas (scroll up = zoom in, scroll down = zoom out)
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -390,402 +455,321 @@ export function CandlestickChart({
     return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
   }, []);
 
-
   const hoveredCandle = hoveredIndex !== null ? visibleCandles[hoveredIndex] : null;
+  const selectId = `${uid}-snapshot`;
+  const rangeStartId = `${uid}-range-start`;
+  const rangeEndId = `${uid}-range-end`;
 
   return (
     <Card>
-      {/* Header and Provenance Banner */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <h2 style={{ fontSize: 20, fontWeight: 600 }}>Biểu đồ nến Lịch sử giá (OHLCV)</h2>
-            <Badge variant="neutral">{symbol} {timeframe}</Badge>
-            <Badge variant={isPristine ? 'success' : 'warning'}>
-              {isPristine ? 'Không thiếu khoảng' : 'Có khoảng trống (gap)'}
-            </Badge>
+      <div className="stack">
+        <div className="spread">
+          <div className="stack-sm">
+            <div className="row">
+              <h2 className="card-title">Biểu đồ nến</h2>
+              <Badge variant="neutral">{symbol} {timeframe}</Badge>
+              {isPristine === undefined ? (
+                <Badge variant="neutral">Chưa có dữ liệu chất lượng</Badge>
+              ) : (
+                <Badge variant={isPristine ? 'success' : 'warning'}>
+                  {isPristine ? 'Không thiếu khoảng' : 'Có khoảng thiếu'}
+                </Badge>
+              )}
+            </div>
+            <p className="card-sub">
+              Nguồn: Binance Spot lịch sử, không phải giá trực tiếp. Múi giờ: {tzLabel}
+              {useUtc7 ? ' (giờ Việt Nam)' : ''}.
+            </p>
           </div>
-          <p style={{ fontSize: 13, color: 'var(--ink-muted)', marginTop: 4 }}>
-            Múi giờ: <strong>{tzLabel}</strong> {useUtc7 ? '(Giờ Việt Nam)' : ''} | Horizon dự đoán: <strong>30m</strong> (tách biệt) | 
-            Nguồn: Binance Spot lịch sử (không phải giá live)
-          </p>
+
           {allSnapshots && allSnapshots.length > 1 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
-              <span style={{ fontSize: 13, color: 'var(--ink-muted)', fontWeight: 500 }}>📂 Chọn bản snapshot:</span>
+            <div className="field">
+              <label className="label" htmlFor={selectId}>Bộ dữ liệu</label>
               <select
+                id={selectId}
+                className="select data-chart-select"
                 value={snapshotId}
                 onChange={(e) => router.push(`/data?snapshot_id=${e.target.value}`)}
-                style={{
-                  padding: '6px 10px',
-                  border: '1px solid var(--hairline)',
-                  borderRadius: 6,
-                  fontSize: 13,
-                  background: '#fff',
-                  color: 'var(--ink)',
-                  cursor: 'pointer',
-                }}
               >
-                {allSnapshots.map((s) => {
-                  const sStart = new Date(s.start_time_ms + tzOffsetMs).toISOString().slice(5, 10);
-                  const sEnd = new Date(s.end_time_ms + tzOffsetMs).toISOString().slice(5, 10);
-                  return (
-                    <option key={s.id} value={s.id}>
-                      {s.symbol} {s.timeframe} ({sStart} → {sEnd}) • {s.candle_count.toLocaleString()} nến
-                    </option>
-                  );
-                })}
+                {allSnapshots.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.symbol} {s.timeframe} ({showTime(s.start_time_ms).slice(5, 10)} → {showTime(s.end_time_ms).slice(5, 10)}) · {formatInt(s.candle_count)} nến
+                  </option>
+                ))}
               </select>
             </div>
           )}
         </div>
 
-        {/* Viewport & Navigation Controls */}
-        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
-          {snapshotStartMs && (
-            <button
-              type="button"
-              onClick={jumpToSnapshotStart}
-              disabled={isLoading}
-              className="button"
-              style={{ padding: '6px 12px', fontSize: 13 }}
-            >
-              ⏮ Đầu snapshot
-            </button>
-          )}
-          {snapshotEndMs && (
-            <button
-              type="button"
-              onClick={jumpToSnapshotEnd}
-              disabled={isLoading}
-              className="button"
-              style={{ padding: '6px 12px', fontSize: 13 }}
-            >
-              ⏭ Cuối snapshot
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setOffsetRight((prev) => Math.min(candles.length - visibleCount, prev + Math.floor(visibleCount * 0.25)))}
-            disabled={offsetRight >= candles.length - visibleCount}
-            className="button"
-            style={{ padding: '6px 12px', fontSize: 13 }}
-          >
-            Trượt trái
-          </button>
-          <button
-            type="button"
-            onClick={() => setOffsetRight((prev) => Math.max(0, prev - Math.floor(visibleCount * 0.25)))}
-            disabled={offsetRight <= 0}
-            className="button"
-            style={{ padding: '6px 12px', fontSize: 13 }}
-          >
-            Trượt phải
-          </button>
-          <button
-            type="button"
-            onClick={() => setVisibleCount((prev) => Math.max(20, Math.floor(prev * 0.75)))}
-            disabled={visibleCount <= 20}
-            className="button"
-            style={{ padding: '6px 12px', fontSize: 13 }}
-          >
-            Thu phóng +
-          </button>
-          <button
-            type="button"
-            onClick={() => setVisibleCount((prev) => Math.min(candles.length, Math.floor(prev * 1.35)))}
-            disabled={visibleCount >= candles.length}
-            className="button"
-            style={{ padding: '6px 12px', fontSize: 13 }}
-          >
-            Thu nhỏ -
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setVisibleCount(Math.min(candles.length, 120));
-              setOffsetRight(0);
-            }}
-            className="button"
-            style={{ padding: '6px 12px', fontSize: 13 }}
-          >
-            Đặt lại
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowTable((v) => !v)}
-            className="button"
-            style={{ padding: '6px 12px', fontSize: 13, background: showTable ? 'var(--surface-pearl)' : undefined }}
-          >
-            {showTable ? 'Ẩn bảng số' : 'Hiện bảng số'}
-          </button>
-          <button
-            type="button"
-            onClick={() => setUseUtc7((v) => !v)}
-            className="button"
-            style={{ padding: '6px 12px', fontSize: 13, background: useUtc7 ? 'var(--surface-pearl)' : undefined }}
-          >
-            {useUtc7 ? '🕒 Múi giờ: UTC+7 (Đổi sang UTC)' : '🕒 Múi giờ: UTC (Đổi sang UTC+7)'}
-          </button>
-        </div>
-      </div>
+        {fetchError && <Notice variant="error">{fetchError}</Notice>}
 
-      {/* Date Range Jump Controls */}
-      {/* Date Range Jump Controls with native Calendar Picker */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12, fontSize: 13 }}>
-        <span style={{ color: 'var(--ink-muted)', fontWeight: 500 }}>📅 Khung nhìn biểu đồ ({tzLabel}):</span>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <span style={{ color: 'var(--ink-muted)', fontSize: 12 }}>Từ:</span>
-          <input
-            type="datetime-local"
-            step="60"
-            value={rangeStart}
-            onChange={(e) => setRangeStart(e.target.value)}
-            style={{
-              padding: '5px 10px',
-              border: '1px solid var(--hairline)',
-              borderRadius: 6,
-              fontSize: 13,
-              background: '#fff',
-              color: 'var(--ink)',
-            }}
-          />
-        </label>
-        <span>→</span>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <span style={{ color: 'var(--ink-muted)', fontSize: 12 }}>Đến:</span>
-          <input
-            type="datetime-local"
-            step="60"
-            value={rangeEnd}
-            onChange={(e) => setRangeEnd(e.target.value)}
-            style={{
-              padding: '5px 10px',
-              border: '1px solid var(--hairline)',
-              borderRadius: 6,
-              fontSize: 13,
-              background: '#fff',
-              color: 'var(--ink)',
-            }}
-          />
-        </label>
-        <button
-          type="button"
-          onClick={() => {
-            const parseInputDate = (s: string): { val?: number; error?: string } => {
-              const trimmed = s.trim();
-              if (!trimmed) return {};
-              let ms: number;
-              const withSec = trimmed.length === 16 ? `${trimmed}:00` : trimmed;
-              const hasExplicitTz = /(Z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
-              if (hasExplicitTz) {
-                ms = Date.parse(trimmed);
-              } else if (useUtc7) {
-                ms = Date.parse(`${withSec}+07:00`);
-              } else {
-                ms = Date.parse(`${withSec}Z`);
-              }
-              if (isNaN(ms)) {
-                return { error: `Định dạng thời gian không hợp lệ: "${s}".` };
-              }
-              return { val: ms };
-            };
+        <div className="chart-frame">
+          {/* Viewport & navigation controls */}
+          <div className="chart-toolbar">
+            <div className="data-chart-group">
+              {snapshotStartMs && (
+                <button
+                  type="button"
+                  className="btn btn-quiet btn-sm"
+                  onClick={jumpToSnapshotStart}
+                  disabled={isLoading}
+                >
+                  Về đầu
+                </button>
+              )}
+              {snapshotEndMs && (
+                <button
+                  type="button"
+                  className="btn btn-quiet btn-sm"
+                  onClick={jumpToSnapshotEnd}
+                  disabled={isLoading}
+                >
+                  Tới cuối
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-quiet btn-sm"
+                onClick={() => setOffsetRight((prev) => Math.min(candles.length - visibleCount, prev + Math.floor(visibleCount * 0.25)))}
+                disabled={offsetRight >= candles.length - visibleCount}
+              >
+                Trượt trái
+              </button>
+              <button
+                type="button"
+                className="btn btn-quiet btn-sm"
+                onClick={() => setOffsetRight((prev) => Math.max(0, prev - Math.floor(visibleCount * 0.25)))}
+                disabled={offsetRight <= 0}
+              >
+                Trượt phải
+              </button>
+              <button
+                type="button"
+                className="btn btn-quiet btn-sm"
+                onClick={() => setVisibleCount((prev) => Math.max(20, Math.floor(prev * 0.75)))}
+                disabled={visibleCount <= 20}
+              >
+                Phóng to
+              </button>
+              <button
+                type="button"
+                className="btn btn-quiet btn-sm"
+                onClick={() => setVisibleCount((prev) => Math.min(candles.length, Math.floor(prev * 1.35)))}
+                disabled={visibleCount >= candles.length}
+              >
+                Thu nhỏ
+              </button>
+              <button
+                type="button"
+                className="btn btn-quiet btn-sm"
+                onClick={() => {
+                  setVisibleCount(Math.min(candles.length, 120));
+                  setOffsetRight(0);
+                }}
+              >
+                Đặt lại
+              </button>
+            </div>
 
-            let startMs: number | undefined = undefined;
-            let endMs: number | undefined = undefined;
-            if (rangeStart) {
-              const res = parseInputDate(rangeStart);
-              if (res.error) {
-                setFetchError(res.error);
-                return;
-              }
-              startMs = res.val;
-            }
-            if (rangeEnd) {
-              const res = parseInputDate(rangeEnd);
-              if (res.error) {
-                setFetchError(res.error);
-                return;
-              }
-              endMs = res.val;
-            }
-            if (startMs !== undefined && endMs !== undefined && startMs > endMs) {
-              setFetchError('Thời gian bắt đầu phải nhỏ hơn hoặc bằng thời gian kết thúc.');
-              return;
-            }
-            fetchWindow(startMs, endMs);
-          }}
-          disabled={isLoading || (!rangeStart && !rangeEnd)}
-          className="button"
-          style={{ padding: '5px 14px', fontSize: 13, fontWeight: 500 }}
-          title="Di chuyển biểu đồ đến khoảng thời gian này trong snapshot đã chọn"
-        >
-          {isLoading ? 'Đang chuyển...' : 'Xem khoảng nến này'}
-        </button>
-        <span style={{ color: 'var(--ink-muted)', fontSize: 12 }}>(Chỉ xem nến trong snapshot đang chọn)</span>
-        {fetchError && <span style={{ color: '#ff3b30', fontSize: 12 }}>{fetchError}</span>}
-      </div>
-
-      {/* Hovered Info Strip */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 16,
-          flexWrap: 'wrap',
-          fontSize: 13,
-          padding: '8px 12px',
-          background: 'var(--surface-pearl)',
-          borderRadius: 8,
-          marginBottom: 12,
-          fontFamily: 'var(--font-mono)',
-        }}
-      >
-        {hoveredCandle ? (
-          <>
-            <span><strong>Thời gian:</strong> {new Date(hoveredCandle.open_time_ms + tzOffsetMs).toISOString().slice(0, 19).replace('T', ' ')} ({tzLabel})</span>
-            <span><strong>Mở:</strong> ${hoveredCandle.open.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-            <span><strong>Cao:</strong> ${hoveredCandle.high.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-            <span><strong>Thấp:</strong> ${hoveredCandle.low.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-            <span>
-              <strong>Đóng:</strong>{' '}
-              <span style={{ color: hoveredCandle.close >= hoveredCandle.open ? '#34c759' : '#ff3b30', fontWeight: 600 }}>
-                ${hoveredCandle.close.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-              </span>
-            </span>
-            <span><strong>Khối lượng:</strong> {hoveredCandle.volume.toFixed(4)} BTC</span>
-            <span><strong>Giao dịch:</strong> {hoveredCandle.trades_count}</span>
-          </>
-        ) : (
-          <span style={{ color: 'var(--ink-muted)' }}>
-            💡 <strong>Kéo giữ chuột trái</strong> để trượt nến qua lại | <strong>Cuộn chuột</strong> để phóng to / thu nhỏ. Hiển thị {visibleCandles.length} / {candles.length} nến ({startIndex + 1} → {endIndex}).
-            {gapCount > 0 && <span style={{ color: '#ff9500', marginLeft: 8 }}>⚠️ Có {gapCount} khoảng thiếu nến (vạch đứt cam).</span>}
-          </span>
-        )}
-      </div>
-
-      {/* Canvas */}
-      {/* Canvas */}
-      <div
-        ref={containerRef}
-        style={{
-          width: '100%',
-          height: 460,
-          position: 'relative',
-          cursor: isDragging ? 'grabbing' : 'crosshair',
-          userSelect: 'none',
-        }}
-      >
-        <canvas
-          ref={canvasRef}
-          onMouseDown={(e) => {
-            if (e.button === 0 && candles.length > visibleCount) {
-              setIsDragging(true);
-              dragStartXRef.current = e.clientX;
-              dragStartOffsetRef.current = offsetRight;
-            }
-          }}
-          onMouseUp={() => setIsDragging(false)}
-          onMouseMove={(e) => {
-            const canvas = canvasRef.current;
-            if (!canvas) return;
-            const rect = canvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            const plotWidth = rect.width - 75;
-
-            if (isDragging) {
-              const deltaX = e.clientX - dragStartXRef.current;
-              const slotWidth = plotWidth / Math.max(1, visibleCandles.length);
-              const candleShift = Math.round(deltaX / Math.max(1, slotWidth));
-              const newOffset = Math.max(
-                0,
-                Math.min(candles.length - visibleCount, dragStartOffsetRef.current + candleShift)
-              );
-              setOffsetRight(newOffset);
-              setHoveredIndex(null);
-              setMousePos(null);
-              return;
-            }
-
-            if (x >= 0 && x <= plotWidth && visibleCandles.length > 0) {
-              const slotWidth = plotWidth / visibleCandles.length;
-              const idx = Math.min(visibleCandles.length - 1, Math.max(0, Math.floor(x / slotWidth)));
-              setHoveredIndex(idx);
-              setMousePos({ x, y });
-            } else {
-              setHoveredIndex(null);
-              setMousePos(null);
-            }
-          }}
-          onMouseLeave={() => {
-            if (!isDragging) {
-              setHoveredIndex(null);
-              setMousePos(null);
-            }
-          }}
-          onTouchStart={(e) => {
-            if (e.touches.length === 1 && candles.length > visibleCount) {
-              setIsDragging(true);
-              dragStartXRef.current = e.touches[0].clientX;
-              dragStartOffsetRef.current = offsetRight;
-            }
-          }}
-          onTouchEnd={() => setIsDragging(false)}
-          onTouchMove={(e) => {
-            if (!isDragging || e.touches.length !== 1 || !canvasRef.current) return;
-            const rect = canvasRef.current.getBoundingClientRect();
-            const plotWidth = rect.width - 75;
-            const deltaX = e.touches[0].clientX - dragStartXRef.current;
-            const slotWidth = plotWidth / Math.max(1, visibleCandles.length);
-            const candleShift = Math.round(deltaX / Math.max(1, slotWidth));
-            const newOffset = Math.max(
-              0,
-              Math.min(candles.length - visibleCount, dragStartOffsetRef.current + candleShift)
-            );
-            setOffsetRight(newOffset);
-          }}
-          style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none' }}
-        />
-      </div>
-
-      {/* Optional Table */}
-      {showTable && (
-        <div style={{ marginTop: 24, borderTop: '1px solid var(--hairline)', paddingTop: 16 }}>
-          <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>
-            Bảng nến trong vùng hiển thị ({visibleCandles.length} nến)
-          </h3>
-          <div className="table-responsive" style={{ maxHeight: 320, overflowY: 'auto' }}>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Thời gian ({tzLabel})</th>
-                  <th>Giá mở</th>
-                  <th>Giá cao</th>
-                  <th>Giá thấp</th>
-                  <th>Giá đóng</th>
-                  <th>Khối lượng</th>
-                  <th>Giao dịch</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleCandles.map((c) => (
-                  <tr key={c.open_time_ms}>
-                    <td>{new Date(c.open_time_ms + tzOffsetMs).toISOString().slice(0, 19).replace('T', ' ')}</td>
-                    <td>${c.open.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                    <td>${c.high.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                    <td>${c.low.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                    <td style={{ color: c.close >= c.open ? '#34c759' : '#ff3b30', fontWeight: 500 }}>
-                      ${c.close.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                    </td>
-                    <td>{c.volume.toFixed(4)}</td>
-                    <td>{c.trades_count}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="data-chart-group">
+              <div className="seg" role="group" aria-label="Múi giờ hiển thị">
+                <button type="button" className="seg-btn" aria-pressed={useUtc7} onClick={() => setUseUtc7(true)}>
+                  UTC+7
+                </button>
+                <button type="button" className="seg-btn" aria-pressed={!useUtc7} onClick={() => setUseUtc7(false)}>
+                  UTC
+                </button>
+              </div>
+              <button
+                type="button"
+                className="btn btn-quiet btn-sm"
+                aria-pressed={showTable}
+                onClick={() => setShowTable((v) => !v)}
+              >
+                {showTable ? 'Ẩn bảng số' : 'Hiện bảng số'}
+              </button>
+            </div>
           </div>
+
+          {/* Date range jump */}
+          <div className="chart-toolbar">
+            <div className="data-chart-group">
+              <label className="data-chart-field" htmlFor={rangeStartId}>
+                Từ ({tzLabel})
+                <input
+                  id={rangeStartId}
+                  type="datetime-local"
+                  step="60"
+                  className="input data-chart-input"
+                  value={rangeStart}
+                  onChange={(e) => setRangeStart(e.target.value)}
+                />
+              </label>
+              <label className="data-chart-field" htmlFor={rangeEndId}>
+                Đến ({tzLabel})
+                <input
+                  id={rangeEndId}
+                  type="datetime-local"
+                  step="60"
+                  className="input data-chart-input"
+                  value={rangeEnd}
+                  onChange={(e) => setRangeEnd(e.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={applyRange}
+                disabled={isLoading || (!rangeStart && !rangeEnd)}
+                title="Chuyển biểu đồ đến khoảng thời gian này trong bộ dữ liệu đang chọn"
+              >
+                {isLoading ? 'Đang tải...' : 'Xem khoảng này'}
+              </button>
+            </div>
+            <span>Chỉ xem nến trong bộ dữ liệu đang chọn.</span>
+          </div>
+
+          {/* Hovered info strip */}
+          <div className="data-chart-info">
+            {hoveredCandle ? (
+              <>
+                <span>{showTime(hoveredCandle.open_time_ms)} ({tzLabel})</span>
+                <span>Mở {formatUsd(hoveredCandle.open)}</span>
+                <span>Cao {formatUsd(hoveredCandle.high)}</span>
+                <span>Thấp {formatUsd(hoveredCandle.low)}</span>
+                <span className={hoveredCandle.close >= hoveredCandle.open ? 'data-up' : 'data-down'}>
+                  Đóng {formatUsd(hoveredCandle.close)}
+                </span>
+                <span>Khối lượng {hoveredCandle.volume.toFixed(4)} BTC</span>
+                <span>Giao dịch {formatInt(hoveredCandle.trades_count)}</span>
+              </>
+            ) : (
+              <span className="data-chart-info-idle">
+                Kéo chuột để trượt, cuộn chuột để phóng to hoặc thu nhỏ. Đang hiển thị {formatInt(visibleCandles.length)} / {formatInt(candles.length)} nến
+                {visibleCandles.length > 0 ? ` (${formatInt(startIndex + 1)} → ${formatInt(endIndex)})` : ''}.
+                {gapCount > 0 && (
+                  <span className="data-warn"> Có {gapCount} khoảng thiếu nến (vạch đứt).</span>
+                )}
+              </span>
+            )}
+          </div>
+
+          {/* Canvas */}
+          <div
+            ref={containerRef}
+            className={`data-chart-stage${isDragging ? ' is-dragging' : ''}`}
+          >
+            <canvas
+              ref={canvasRef}
+              className="chart-canvas"
+              role="img"
+              aria-label={`Biểu đồ nến ${symbol} ${timeframe}`}
+              onMouseDown={(e) => {
+                if (e.button === 0 && candles.length > visibleCount) {
+                  setIsDragging(true);
+                  dragStartXRef.current = e.clientX;
+                  dragStartOffsetRef.current = offsetRight;
+                }
+              }}
+              onMouseUp={() => setIsDragging(false)}
+              onMouseMove={(e) => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const plotWidth = rect.width - PADDING_RIGHT;
+
+                if (isDragging) {
+                  const deltaX = e.clientX - dragStartXRef.current;
+                  const slotWidth = plotWidth / Math.max(1, visibleCandles.length);
+                  const candleShift = Math.round(deltaX / Math.max(1, slotWidth));
+                  const newOffset = Math.max(
+                    0,
+                    Math.min(candles.length - visibleCount, dragStartOffsetRef.current + candleShift)
+                  );
+                  setOffsetRight(newOffset);
+                  setHoveredIndex(null);
+                  setMousePos(null);
+                  return;
+                }
+
+                if (x >= 0 && x <= plotWidth && visibleCandles.length > 0) {
+                  const slotWidth = plotWidth / visibleCandles.length;
+                  const idx = Math.min(visibleCandles.length - 1, Math.max(0, Math.floor(x / slotWidth)));
+                  setHoveredIndex(idx);
+                  setMousePos({ x, y });
+                } else {
+                  setHoveredIndex(null);
+                  setMousePos(null);
+                }
+              }}
+              onMouseLeave={() => {
+                if (!isDragging) {
+                  setHoveredIndex(null);
+                  setMousePos(null);
+                }
+              }}
+              onTouchStart={(e) => {
+                if (e.touches.length === 1 && candles.length > visibleCount) {
+                  setIsDragging(true);
+                  dragStartXRef.current = e.touches[0].clientX;
+                  dragStartOffsetRef.current = offsetRight;
+                }
+              }}
+              onTouchEnd={() => setIsDragging(false)}
+              onTouchMove={(e) => {
+                if (!isDragging || e.touches.length !== 1 || !canvasRef.current) return;
+                const rect = canvasRef.current.getBoundingClientRect();
+                const plotWidth = rect.width - PADDING_RIGHT;
+                const deltaX = e.touches[0].clientX - dragStartXRef.current;
+                const slotWidth = plotWidth / Math.max(1, visibleCandles.length);
+                const candleShift = Math.round(deltaX / Math.max(1, slotWidth));
+                const newOffset = Math.max(
+                  0,
+                  Math.min(candles.length - visibleCount, dragStartOffsetRef.current + candleShift)
+                );
+                setOffsetRight(newOffset);
+              }}
+            />
+          </div>
+
+          {/* Optional table */}
+          {showTable && (
+            <div className="data-chart-table">
+              <table className="data-table">
+                <caption className="visually-hidden">
+                  Bảng nến trong vùng hiển thị ({visibleCandles.length} nến)
+                </caption>
+                <thead>
+                  <tr>
+                    <th>Thời gian ({tzLabel})</th>
+                    <th>Giá mở</th>
+                    <th>Giá cao</th>
+                    <th>Giá thấp</th>
+                    <th>Giá đóng</th>
+                    <th>Khối lượng</th>
+                    <th>Giao dịch</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleCandles.map((c) => (
+                    <tr key={c.open_time_ms}>
+                      <td>{showTime(c.open_time_ms)}</td>
+                      <td>{formatUsd(c.open)}</td>
+                      <td>{formatUsd(c.high)}</td>
+                      <td>{formatUsd(c.low)}</td>
+                      <td className={c.close >= c.open ? 'data-up' : 'data-down'}>{formatUsd(c.close)}</td>
+                      <td>{c.volume.toFixed(4)}</td>
+                      <td>{formatInt(c.trades_count)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </Card>
   );
 }

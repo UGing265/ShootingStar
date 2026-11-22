@@ -1,0 +1,135 @@
+/* Lịch sử giá — styles scoped to the data feature (prefix: data-) */
+
+/* ── Ingest panel ── */
+.data-ingest-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.data-ingest-hint {
+  max-width: 64ch;
+}
+
+.data-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.data-preview-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--sp-3);
+}
+
+.data-job-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.data-job-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+
+/* ── Chart ── */
+.data-chart-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.data-chart-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-48);
+}
+
+.data-chart-input {
+  width: auto;
+  min-height: 32px;
+  padding: 3px 10px;
+  font-size: var(--fs-sm);
+}
+
+.data-chart-select {
+  width: auto;
+  min-width: 260px;
+  max-width: 100%;
+  min-height: 34px;
+  font-size: var(--fs-sm);
+}
+
+.data-chart-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--divider-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--ink-80);
+}
+
+.data-chart-info-idle {
+  font-family: var(--font-family);
+  color: var(--ink-48);
+}
+
+.data-chart-stage {
+  position: relative;
+  width: 100%;
+  height: 460px;
+  cursor: crosshair;
+  user-select: none;
+}
+
+.data-chart-stage.is-dragging {
+  cursor: grabbing;
+}
+
+.data-chart-stage canvas {
+  height: 100%;
+}
+
+.data-up {
+  color: var(--up);
+}
+
+.data-down {
+  color: var(--down);
+}
+
+.data-warn {
+  color: var(--warn);
+}
+
+.data-chart-table {
+  max-height: 320px;
+  overflow: auto;
+  border-top: 1px solid var(--hairline);
+}
+
+.data-chart-table .data-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--pearl);
+}
+
+/* ── Lists ── */
+.data-id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}

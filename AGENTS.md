@@ -68,3 +68,9 @@ Mọi đầu việc lớn, phase nghiên cứu mới hoặc đợt tái cấu tr
      - **Kéo giữ chuột trái (Click & Hold / Drag):** Trượt qua lại (Pan left / right) để duyệt dữ liệu.
      - **Click chọn mốc (Click Selection):** Phân biệt rõ thao tác kéo (drag) và nhấp chuột (click) bằng ngưỡng dịch chuyển chuột để không kích hoạt click ngoài ý muốn khi kéo.
    - **Múi giờ chuẩn:** Giao diện hiển thị người dùng và biểu đồ mặc định thống nhất theo **UTC+7** (Asia/Ho_Chi_Minh); Backend API, Database và Parquet lưu trữ gốc theo mốc chuẩn UTC / epoch millisecond.
+
+---
+
+## 5. Điều phối Đa Agent (Orca)
+
+Điều phối Lead / worker qua Orca theo skill `orca-orchestrator`. Bất biến: không agent nào commit/push khi chưa có xác nhận của user; chỉ Lead báo user "xong", sau khi tự kiểm chứng bằng output thật.

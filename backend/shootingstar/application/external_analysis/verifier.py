@@ -23,7 +23,6 @@ class ExternalAnalysisVerifier:
         cls,
         raw_payload: Dict[str, Any],
         valid_candle_times: Set[int],
-        approved_lesson_ids: Optional[Set[str]] = None,
         model_id: str = "gemini-2.5-flash",
         prompt_version: str = "v1",
         key_index: Optional[int] = None,
@@ -37,11 +36,8 @@ class ExternalAnalysisVerifier:
         1. Direction must strictly be UP, DOWN, or ABSTAIN. Malformed directions fallback to ABSTAIN.
         2. Evidence candle timestamps must exist in valid_candle_times (the 6h input window).
            Timestamps outside the input window are rejected as potential hallucinations.
-        3. Lesson IDs must exist in approved_lesson_ids. Unapproved or fabricated IDs are stripped.
-        4. Probability must remain None until explicit calibration pipeline is implemented.
+        3. Probability must remain None until explicit calibration pipeline is implemented.
         """
-        approved_lesson_ids = approved_lesson_ids or set()
-
         # 1. Parse direction
         raw_direction = str(raw_payload.get("direction", "")).strip().upper()
         if raw_direction in ("UP", "DOWN", "ABSTAIN"):
@@ -69,23 +65,11 @@ class ExternalAnalysisVerifier:
                 except (ValueError, TypeError):
                     continue
 
-        # 4. Sanitize lesson IDs
-        raw_lessons = raw_payload.get("lesson_ids", [])
-        sanitized_lessons: List[str] = []
-        if isinstance(raw_lessons, list):
-            for l_id in raw_lessons:
-                l_str = str(l_id).strip()
-                if l_str in approved_lesson_ids:
-                    sanitized_lessons.append(l_str)
-                else:
-                    logger.warning("Rejected unapproved or hallucinated lesson ID '%s'", l_str)
-
-        # 5. Probability strictly None (Honest reporting: uncalibrated LLM probabilities are not real metrics)
+        # 4. Probability strictly None (Honest reporting: uncalibrated LLM probabilities are not real metrics)
         return ModelPredictionOutput(
             direction=direction,
             rationale=rationale,
             evidence_candle_times=sanitized_evidence,
-            lesson_ids=sanitized_lessons,
             probability_up=None,
             probability_down=None,
             model_id=model_id,

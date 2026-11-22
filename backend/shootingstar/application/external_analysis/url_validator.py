@@ -1,4 +1,4 @@
-"""SSRF-safe URL validation for external lesson sources."""
+"""SSRF-safe URL validation for external research sources."""
 
 import ipaddress
 import socket

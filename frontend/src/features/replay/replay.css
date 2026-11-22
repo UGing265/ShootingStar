@@ -1,0 +1,135 @@
+.replay-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: 0;
+  list-style: none;
+}
+
+.replay-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px 14px 4px 4px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  background: var(--canvas);
+  font-size: var(--fs-sm);
+  color: var(--ink-48);
+}
+
+.replay-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--divider-soft);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.replay-steps li[data-done='true'] {
+  color: var(--ink-80);
+}
+
+.replay-steps li[aria-current='step'] {
+  border-color: var(--primary);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.replay-steps li[aria-current='step'] .replay-step-num {
+  background: var(--primary);
+  color: var(--on-dark);
+}
+
+.replay-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.replay-options {
+  align-items: flex-end;
+  gap: var(--sp-5);
+}
+
+.replay-levels {
+  margin-top: var(--sp-4);
+}
+
+.replay-level {
+  margin-top: 2px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.replay-level-up {
+  color: var(--up);
+}
+
+.replay-level-down {
+  color: var(--down);
+}
+
+.replay-vote-grid {
+  margin: var(--sp-4) 0;
+}
+
+.replay-vote {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-5);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  background: var(--canvas);
+  cursor: pointer;
+  transition: transform 0.12s ease, background-color 0.12s ease;
+}
+
+.replay-vote:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.replay-vote:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.replay-vote-title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.replay-vote-up {
+  color: var(--up);
+}
+
+.replay-vote-up:hover:not(:disabled) {
+  background: var(--up-bg);
+  border-color: var(--up-line);
+}
+
+.replay-vote-down {
+  color: var(--down);
+}
+
+.replay-vote-down:hover:not(:disabled) {
+  background: var(--down-bg);
+  border-color: var(--down-line);
+}
+
+.replay-engine-hints {
+  display: grid;
+  gap: var(--sp-1);
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-80);
+  font-size: var(--fs-sm);
+}
