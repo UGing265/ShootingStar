@@ -138,6 +138,28 @@ class SimulationJobManager:
         out_path.write_text(json.dumps(job.to_dict(), indent=2), encoding="utf-8")
         self._jobs[job.job_id] = job
 
+    @staticmethod
+    def _snapshot_info(path: Path) -> tuple[int, int, str]:
+        """Read only metadata columns when the caller has no snapshot DB record."""
+        import pyarrow.parquet as pq
+
+        parquet = pq.ParquetFile(path)
+        metadata = parquet.metadata
+        if metadata.num_rows == 0:
+            raise DomainError(f"Snapshot has no candles: {path}")
+
+        def boundary(column: str, group: int, first: bool):
+            stats = metadata.row_group(group).column(parquet.schema.names.index(column)).statistics
+            if stats is not None and stats.has_min_max:
+                return stats.min if first else stats.max
+            values = parquet.read_row_group(group, columns=[column])[column]
+            return values[0 if first else -1].as_py()
+
+        return (boundary("open_time_ms", 0, True),
+                boundary("close_time_ms", metadata.num_row_groups - 1, False),
+                boundary("timeframe", 0, True))
+
+
     def create_job(
         self,
         snapshot_path: Path,
@@ -145,19 +167,40 @@ class SimulationJobManager:
         buy_time_ms: int,
         buy_price: float,
         horizon_minutes: int = 30,
+        *,
+        snapshot_start_ms: Optional[int] = None,
+        snapshot_end_ms: Optional[int] = None,
+        snapshot_timeframe: Optional[str] = None,
     ) -> SimulationJob:
-        candles = self.snapshot_storage.load_snapshot(snapshot_path)
-        if not candles:
-            raise DomainError(f"Snapshot has no candles: {snapshot_path}")
-
-        snap_start_ms = candles[0].open_time_ms
-        snap_end_ms = candles[-1].close_time_ms
+        if snapshot_start_ms is None or snapshot_end_ms is None or snapshot_timeframe is None:
+            snapshot_start_ms, snapshot_end_ms, snapshot_timeframe = self._snapshot_info(snapshot_path)
+        snap_start_ms = snapshot_start_ms
+        snap_end_ms = snapshot_end_ms
 
         if buy_time_ms < snap_start_ms or buy_time_ms > snap_end_ms:
             raise DomainError(
                 f"buy_time_ms ({buy_time_ms}) outside snapshot bounds [{snap_start_ms}, {snap_end_ms}]"
             )
 
+        from shootingstar.application.entry_strategy import EntryStrategyEngine, is_candle_causally_available
+
+        tf_ms = Timeframe(snapshot_timeframe).duration_ms
+        engine = EntryStrategyEngine()
+        span = (engine.lookback_bars + 2) * tf_ms
+        while True:
+            start = max(snap_start_ms, buy_time_ms - span)
+            candles = self.snapshot_storage.load_snapshot_window(
+                snapshot_path, start_ms=start, end_ms=min(snap_end_ms, buy_time_ms + tf_ms - 1))
+            if start <= snap_start_ms or sum(
+                is_candle_causally_available(c, buy_time_ms, engine.assumed_latency_ms) for c in candles
+            ) >= engine.lookback_bars:
+                break
+            span *= 2
+        if not candles:
+            import pyarrow.parquet as pq
+            if pq.read_metadata(snapshot_path).num_rows == 0:
+                raise DomainError(f"Snapshot has no candles: {snapshot_path}")
+            raise DomainError("Cannot simulate prior to first available candle in snapshot")
         symbol = candles[0].symbol
         timeframe = candles[0].timeframe
 
@@ -321,7 +364,7 @@ class SimulationJobManager:
         self._persist_job(job)
         return job
 
-    def reveal_outcome(self, job_id: str, snapshot_path: Path) -> SimulationJob:
+    def reveal_outcome(self, job_id: str, snapshot_path: Path, *, snapshot_end_ms: Optional[int] = None) -> SimulationJob:
         job = self.get_job(job_id)
         if job.user_vote is None:
             raise DomainError("Phải khóa dự đoán của bạn trước khi xem kết quả thực tế.")
@@ -330,16 +373,24 @@ class SimulationJobManager:
             return job  # Idempotent: already revealed
 
         target_time_ms = job.buy_time_ms + (job.horizon_minutes * 60 * 1000)
-        candles = self.snapshot_storage.load_snapshot(snapshot_path)
+        if snapshot_end_ms is None:
+            try:
+                _, snapshot_end_ms, _ = self._snapshot_info(snapshot_path)
+            except DomainError:
+                raise DomainError("Snapshot has no candles") from None
+        tf = Timeframe(job.timeframe)
+        candles = self.snapshot_storage.load_snapshot_window(
+            snapshot_path, start_ms=job.buy_time_ms - tf.duration_ms,
+            end_ms=target_time_ms + 3 * tf.duration_ms)
         if not candles:
-            raise DomainError("Snapshot has no candles")
-
-        tf = Timeframe(candles[0].timeframe)
+            import pyarrow.parquet as pq
+            if pq.read_metadata(snapshot_path).num_rows == 0:
+                raise DomainError("Snapshot has no candles")
         from datetime import datetime, timezone
         now_utc = datetime.now(timezone.utc).isoformat()
 
         # Check if snapshot covers the horizon
-        if candles[-1].close_time_ms < target_time_ms:
+        if snapshot_end_ms < target_time_ms:
             job.outcome = SimulationOutcome(
                 status="PENDING",
                 horizon_time_ms=target_time_ms,

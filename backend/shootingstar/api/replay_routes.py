@@ -98,6 +98,7 @@ def create_simulation_job(req: CreateSimulationJobRequest):
         snap_path = resolve_snapshot_file_path(snap.file_path)
         if snap_path is None:
             raise HTTPException(status_code=404, detail="Snapshot data file not found on disk")
+        snap_start_ms, snap_end_ms, snap_timeframe = snap.start_time_ms, snap.end_time_ms, snap.timeframe
 
     try:
         job = simulation_manager.create_job(
@@ -106,6 +107,9 @@ def create_simulation_job(req: CreateSimulationJobRequest):
             buy_time_ms=req.buy_time_ms,
             buy_price=req.buy_price,
             horizon_minutes=req.horizon_minutes,
+            snapshot_start_ms=snap_start_ms,
+            snapshot_end_ms=snap_end_ms,
+            snapshot_timeframe=snap_timeframe,
         )
         return _to_job_response(job)
     except DomainError as err:
@@ -148,9 +152,10 @@ def reveal_simulation_outcome(job_id: str):
         snap_path = resolve_snapshot_file_path(snap.file_path)
         if snap_path is None:
             raise HTTPException(status_code=404, detail="Snapshot data file not found on disk")
+        snap_end_ms = snap.end_time_ms
 
     try:
-        updated_job = simulation_manager.reveal_outcome(job_id, snap_path)
+        updated_job = simulation_manager.reveal_outcome(job_id, snap_path, snapshot_end_ms=snap_end_ms)
         return _to_job_response(updated_job)
     except DomainError as err:
         raise HTTPException(status_code=400, detail=str(err))
